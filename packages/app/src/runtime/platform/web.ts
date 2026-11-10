@@ -1,10 +1,12 @@
 import { createBrowserDraftStore } from "@/runtime/persistence/drafts"
+import { createWebPluginBridge } from "@/runtime/plugin/web-bridge"
 import type { Platform } from "./platform"
 
 export function createWebPlatform(version: string) {
   const platform: Platform = {
     platform: "web",
     draftStore: createBrowserDraftStore(),
+    plugins: createWebPluginBridge(),
     version,
     openExternal(value) {
       if (!URL.canParse(value)) return

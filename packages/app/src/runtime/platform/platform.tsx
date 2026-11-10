@@ -4,6 +4,7 @@ import type { Accessor } from "solid-js"
 import type { DesktopMenuAction, DesktopZoomLevel } from "@/shell/commands/desktop-menu"
 import type { DraftStore } from "@/runtime/persistence/drafts"
 import type { Bridge } from "@opencode/plugin/gui/host"
+import type { WebPluginBridge } from "@/runtime/plugin/web-bridge"
 
 type PickerPaths = string | string[] | null
 
@@ -141,7 +142,7 @@ type PlatformBase = {
 
 export type Platform = PlatformBase &
   (
-    | { platform: "web"; os?: never; windowID?: never }
+    | { platform: "web"; os?: never; windowID?: never; plugins?: WebPluginBridge }
     | {
         platform: "desktop"
         os?: DesktopOS

@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup } from "solid-js"
 import type { PluginOptions } from "@opencode/plugin/gui"
-import type { Bridge, BridgePluginGui, BridgePluginGuis, Entry } from "@opencode/plugin/gui/host"
+import { runsOn, type Bridge, type BridgePluginGui, type BridgePluginGuis, type Entry } from "@opencode/plugin/gui/host"
 import type { OpenCodeClient } from "@opencode/client/promise"
 import { useGlobal } from "@/runtime/server/runtime"
-import { ServerConnection } from "@/runtime/server/registry"
+import { ServerConnection, useServers } from "@/runtime/server/registry"
+import { usePlatform } from "@/runtime/platform/platform"
 import { pluginDefinition } from "./module"
 
 /** A plugin's `./gui-experimental` bundle as this window evaluated it, at one revision. */
@@ -36,11 +37,28 @@ export function PluginGuiLoader(props: {
   onChange: (plugins: readonly PluginGui[], reserved: readonly string[]) => void
 }) {
   const global = useGlobal()
+  const servers = useServers()
+  const platform = usePlatform()
 
+  // The desktop sidecar, or the server that served the web app.
   const controller = createMemo(() => {
-    const conn = global.servers.list().find(ServerConnection.builtin)
+    const list = global.servers.list()
+    const conn = list.find(ServerConnection.builtin) ?? list.find((item) => servers.current(item))
 
     return conn ? global.serverCtx(ServerConnection.key(conn)) : undefined
+  })
+
+  // The browser has no main process to list plugins, so the window lists them on that server with its own client.
+  const web = platform.platform === "web" ? platform.plugins : undefined
+
+  createEffect(() => {
+    const sdk = controller()?.sdk
+
+    if (!web || !sdk || sdk.connection.status() !== "connected") return
+    // A new attempt is a reconnect, which may have missed a `plugin.updated`.
+    sdk.connection.attempt()
+    web.refresh(sdk.api)
+    onCleanup(sdk.event.on("plugin.updated", () => web.refresh(sdk.api)))
   })
 
   // One evaluation per plugin revision, so an unchanged plugin keeps its definition and the host does not reload it.
@@ -59,11 +77,14 @@ export function PluginGuiLoader(props: {
   )
 
   const [found] = createResource(guis, async (input) => {
-    const plugins = await Promise.all(input.plugins.map((plugin) => load(plugin, cache)))
-    const ids = new Set(plugins.map((plugin) => plugin.id))
+    const loaded = await Promise.all(input.plugins.map((plugin) => load(plugin, cache)))
+    const ids = new Set(loaded.map((plugin) => plugin.id))
     cache.forEach((_, id) => {
       if (!ids.has(id)) cache.delete(id)
     })
+
+    // The desktop's main already left out plugins limited to other systems; the browser has no main to do it.
+    const plugins = loaded.filter((plugin) => runsOn(plugin.definition, platform.os))
 
     return { plugins, reserved: input.reserved }
   })

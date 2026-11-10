@@ -9,7 +9,7 @@ import { TruncatedText } from "@opencode/ui/truncated-text"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
-import { ServerConnection } from "@/runtime/server/registry"
+import { useServers } from "@/runtime/server/registry"
 import { useMcpToggle } from "@/providers/connect/mcp"
 import { DialogMcp } from "@/providers/connect/mcp-dialog"
 import { ExtensionPlugins } from "@/runtime/plugin/extension-plugins"
@@ -38,6 +38,7 @@ export const SettingsExtensions: Component<{
   const data = useData()
   const dialog = useDialog()
   const platform = usePlatform()
+  const servers = useServers()
   // MCP connections are per Location, so read and toggle them where the active session runs, as the TUI does. The
   // names come from the default Location so this page lists only the servers available to all projects.
   const location = () => (props.directory ? { directory: props.directory } : data.location.default())
@@ -74,8 +75,8 @@ export const SettingsExtensions: Component<{
     { initialValue: [] },
   )
 
-  // The desktop window runs the GUIs of its own server's plugins, so only that server's rows control them.
-  const own = () => !!platform.plugins && ServerConnection.builtin(serverSdk.server)
+  // The window runs the GUIs of its own server's plugins, so only that server's rows control them.
+  const own = () => !!platform.plugins && servers.current(serverSdk.server)
 
   createEffect(() => {
     if (serverSdk.connection.status() !== "connected") return
