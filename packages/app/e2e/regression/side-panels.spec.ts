@@ -494,6 +494,8 @@ test("dropping on a pane's centre moves the tab there and the emptied pane gives
 
   await dragTab(page, tabIn(page, "p1", "b.md"), pane(page, "side"), { x: 0.5, y: 0.55 })
   const zone = page.locator('[data-slot="pane-drop-zone"]')
+  await expect(zone).toHaveCount(1)
+  await expect(zone).toHaveAttribute("data-pane", "side")
   await expect(zone).not.toHaveAttribute("data-split", /.+/)
   await dropTab(page)
 
@@ -579,4 +581,83 @@ test("a tab dragged between two existing panes lands before the tab it is droppe
   await expect(tabIn(page, "p1", "b.md")).toHaveAttribute("aria-selected", "true")
   await expect(pane(page, "p1").getByRole("tab")).toHaveText(["b.md", "c.md"])
   await expect(pane(page, "side").getByRole("tab")).toHaveText(["a.md"])
+})
+
+test("a tab's menu splits its pane right or down, and offers no split for a pane's only tab", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneMenu", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await tabIn(page, "side", "b.md").click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Split right", exact: true }).click()
+
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  const left = await paneBox(pane(page, "side"))
+  const right = await paneBox(pane(page, "p1"))
+  expect(right.x).toBeGreaterThanOrEqual(left.x + left.width - 1)
+  expect((await storedStrip(page, directory, session))?.panes).toEqual({ "file://b.md": "p1" })
+
+  // The new pane holds only b.md, so its tab cannot split off again.
+  await tabIn(page, "p1", "b.md").click({ button: "right" })
+  await expect(page.getByRole("menuitem", { name: "Split down", exact: true })).toBeDisabled()
+  await page.keyboard.press("Escape")
+
+  await tabIn(page, "side", "c.md").click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Split down", exact: true }).click()
+  await expect(tabIn(page, "p2", "c.md")).toBeVisible()
+  await expect.poll(async () => (await paneBox(pane(page, "p2"))).y).toBeGreaterThan((await paneBox(pane(page, "side"))).y)
+})
+
+test("a pane's + menu adds the tab to that pane instead of splitting it", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  const directory = "C:/OpenCode/PanePlus"
+  const session = "ses_paneplus"
+
+  await openSession(page, {
+    name: "PanePlus",
+    vcsDiff: [fileDiff("src/plus.ts", { additions: 3 })],
+    fileList: () => [],
+    fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
+    seed: {
+      panes: { [session]: { review: true } },
+      storage: paneTabs(directory, session, { all: ["file://a.md"], active: "file://a.md", selected: { side: "file://a.md" } }),
+    },
+  })
+
+  await pane(page, "side").getByRole("button", { name: "Add tab", exact: true }).click()
+  await pane(page, "side").getByRole("button", { name: /^Review/ }).click()
+
+  await expect(pane(page, "side").getByRole("tab", { name: /^Files Changed/ })).toHaveAttribute("aria-selected", "true")
+  await expect(pane(page, "p1")).toHaveCount(0)
+  await expect(tabIn(page, "side", "a.md")).toBeVisible()
+  expect((await storedStrip(page, directory, session))?.layout).toBeUndefined()
+})
+
+test("a divider moves with the arrow keys and exposes its value", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneKeys", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  const divider = page.locator('#review-panel [data-slot="pane-divider"]')
+  await expect(divider).toHaveAttribute("role", "separator")
+  await expect(divider).toHaveAttribute("aria-orientation", "vertical")
+  await expect(divider).toHaveAttribute("aria-valuenow", "50")
+
+  await divider.focus()
+  await page.keyboard.press("ArrowRight")
+  await expect(divider).toHaveAttribute("aria-valuenow", "52")
+  await page.keyboard.press("Shift+ArrowLeft")
+  await expect(divider).toHaveAttribute("aria-valuenow", "42")
+  await page.keyboard.press("ArrowUp")
+  await expect(divider).toHaveAttribute("aria-valuenow", "42")
+
+  const ratio = (await storedStrip(page, directory, session))?.layout as { ratio?: number } | undefined
+  expect(ratio?.ratio).toBeCloseTo(0.42, 2)
 })
