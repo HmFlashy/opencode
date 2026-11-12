@@ -789,6 +789,16 @@ export interface Sessions {
  */
 export type PanelState = "closed" | "open" | "active" | "visible"
 
+/** One pane of the side region, as `Layout.panes` lists it. */
+export interface LayoutPane {
+  /** The pane's id, as stored with its tabs. `side` is the session's first pane. */
+  readonly id: string
+  /** The tabs the pane holds, in strip order, as `${plugin}:${tab id}` keys. */
+  readonly tabs: readonly string[]
+  /** The tab the pane shows; undefined while it holds no tab. */
+  readonly shown?: string
+}
+
 /** How `Layout.open` places a tab. */
 export interface OpenOptions {
   /**
@@ -806,6 +816,16 @@ export interface OpenOptions {
    * Defaults to false.
    */
   readonly background?: boolean
+  /**
+   * The pane the tab lands in, from `Layout.panes`. An unknown id falls back to the host's own placement: the pane of
+   * the last tab of the same plugin, else the pane the tab would otherwise open in.
+   */
+  readonly pane?: string
+  /**
+   * Splits `pane` (or the pane the tab would land in) and puts the tab in the new pane, selected. `row` places the new
+   * pane beside it, `column` below it.
+   */
+  readonly split?: "row" | "column"
 }
 
 /**
@@ -868,6 +888,29 @@ export interface Layout {
    * @param session - Any session.
    */
   stored(session: SessionRef): readonly string[]
+  /**
+   * The side region's panes, in visual order, with the tabs each holds and the one it shows. Empty while the session's
+   * location is unknown or before the app interface mounts. Reactive.
+   *
+   * @param session - Any session.
+   */
+  panes(session: SessionRef): readonly LayoutPane[]
+  /**
+   * Moves an open tab into `pane`, before `before` when given, and selects it. Does nothing for a key that is not
+   * open, or a pane `panes` does not list.
+   *
+   * @param key - `${plugin}:${tab id}`.
+   * @param session - The session whose strip changes.
+   */
+  place(key: string, session: SessionRef, pane: string, options?: { readonly before?: string }): void
+  /**
+   * Splits `pane` (or the pane of `key`) in `direction` and moves `key` into the new pane, selected. `row` places the
+   * new pane beside the old one, `column` below it.
+   *
+   * @param key - `${plugin}:${tab id}`.
+   * @param session - The session whose strip changes.
+   */
+  split(key: string, session: SessionRef, options: { readonly direction: "row" | "column"; readonly pane?: string }): void
   /** The side region. */
   readonly side: {
     /**
