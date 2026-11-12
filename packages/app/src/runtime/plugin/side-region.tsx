@@ -33,7 +33,8 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { same } from "@/runtime/persistence/equality"
 import { useLayout } from "@/shell/state/layout"
 import { useSessionLayout } from "@/session/session-layout"
-import { paneLeaves, type PaneNode, type PaneSplit, type SessionPane } from "@/shell/state/session-tabs"
+import type { SessionPane } from "@/shell/state/session-tabs"
+import { paneGeometry, type Box, type PaneDivider } from "./pane-geometry"
 import type { Sizing } from "@/session/helpers"
 import { PanelTrigger } from "./panel-trigger"
 import { createSessionPanelMenuEntries, type SessionPanelMenuEntry } from "./panel-menu"
@@ -74,11 +75,15 @@ export function SideRegion(props: {
     tabsOpen() && layout.ready() && props.region.empty() ? props.view.key : undefined,
   )
 
-  createEffect(on(starting, (key) => key && props.region.openNewTab("side")))
+  createEffect(on(starting, (key) => key && props.region.openNewTab(props.region.panes()[0])))
 
   const [root, setRoot] = createSignal<HTMLElement>()
 
-  const primary = createMemo(() => props.region.panes()[0])
+  // The pane that carries the plugins' strip actions and the empty state: the first one holding a tab, since an empty
+  // pane is not drawn.
+  const primary = createMemo(
+    () => props.region.panes().find((id) => props.region.pane(id).entries().length > 0) ?? props.region.panes()[0],
+  )
 
   guardClosingFocus({
     root,
@@ -108,21 +113,18 @@ export function SideRegion(props: {
             class="h-full flex shrink-0 contain-strict"
             style={{ width: "var(--panel-hold-width, var(--session-side-content-width, 100%))" }}
           >
-            <div class="relative min-w-0 h-full flex-1 flex flex-col overflow-hidden bg-v2-background-bg-base">
-              <PaneTree
-                node={() => props.region.layout()}
-                region={props.region}
-                view={props.view}
-                screen={props.screen}
-                sidebar={props.sidebar}
-                shown={tabsOpen}
-                present={tabsVisible}
-                animate={() => !props.size.active()}
-                drag={props.drag}
-                size={props.size}
-                primary={primary}
-              />
-            </div>
+            <PaneArea
+              region={props.region}
+              view={props.view}
+              screen={props.screen}
+              sidebar={props.sidebar}
+              shown={tabsOpen}
+              present={tabsVisible}
+              animate={() => !props.size.active()}
+              drag={props.drag}
+              size={props.size}
+              primary={primary}
+            />
           </div>
         </Show>
       </aside>
@@ -573,7 +575,7 @@ function LauncherRow(props: { item: SessionPanelMenuItem; onChoose: () => void }
     </button>
   )
 }
-type TreeProps = {
+type AreaProps = {
   region: Region
   view: MountedSession
   screen: SessionScreen
@@ -586,85 +588,69 @@ type TreeProps = {
   primary: Accessor<SessionPane | undefined>
 }
 
-function PaneTree(props: TreeProps & { node: Accessor<PaneNode> }) {
-  const leaf = createMemo(() => {
-    const node = props.node()
-    return node.type === "leaf" ? node.id : undefined
-  })
-  const split = createMemo(() => {
-    const node = props.node()
-    return node.type === "split" ? node : undefined
-  })
+const percent = (value: number) => `${value * 100}%`
+
+/**
+ * The side region's panes. Each pane is placed by its box instead of nested in the tree, and listed by id, so a pane
+ * keeps its DOM, and the terminals and editors mounted in it, when a split or a close reshapes the tree around it.
+ */
+function PaneArea(props: AreaProps) {
+  const [area, setArea] = createStore({ width: 0, height: 0 })
+  let element: HTMLDivElement | undefined
+
+  createResizeObserver(
+    () => element,
+    ({ width, height }) => setArea({ width, height }),
+  )
+
+  // An empty pane takes no room, unless it shows a New tab view.
+  const geometry = createMemo(() =>
+    paneGeometry(props.region.layout(), (id) => props.region.pane(id).entries().length > 0 || props.region.newTab(id)),
+  )
+
+  const panes = createMemo(() => geometry().panes.map((pane) => pane.id), [], { equals: same })
+  const dividers = createMemo(() => geometry().dividers.map((divider) => divider.id), [], { equals: same })
 
   return (
-    <Show
-      when={leaf()}
-      keyed
-      fallback={
-        <Show when={split()}>
-          {(node) => <PaneSplitView {...props} split={node} />}
-        </Show>
-      }
+    <div
+      ref={(el) => (element = el)}
+      class="relative min-w-0 h-full flex-1 overflow-hidden bg-v2-background-bg-base"
     >
-      {(id) => <PaneLeaf {...props} id={id} />}
-    </Show>
+      <For each={panes()}>
+        {(id) => <PaneLeaf {...props} id={id} box={() => geometry().panes.find((pane) => pane.id === id)?.box} />}
+      </For>
+      <For each={dividers()}>
+        {(id) => (
+          <PaneDividerView
+            divider={() => geometry().dividers.find((divider) => divider.id === id)}
+            area={area}
+            region={props.region}
+            size={props.size}
+          />
+        )}
+      </For>
+    </div>
   )
 }
 
-function PaneSplitView(props: TreeProps & { split: Accessor<PaneSplit> }) {
-  const filled = (node: PaneNode) => paneLeaves(node).some((id) => props.region.pane(id).entries().length > 0)
+function PaneLeaf(props: AreaProps & { id: SessionPane; box: Accessor<Box | undefined> }) {
+  const style = () => {
+    const box = props.box()
 
-  const pair = createMemo(() => {
-    const split = props.split()
-    const first = filled(split.children[0])
-    const second = filled(split.children[1])
-    return first === second
-  })
-
-  return (
-    <Show
-      when={pair()}
-      fallback={
-        <div class="flex-1 min-w-0 min-h-0 flex">
-          <Show
-            when={filled(props.split().children[0])}
-            fallback={<PaneTree {...props} node={() => props.split().children[1]} />}
-          >
-            <PaneTree {...props} node={() => props.split().children[0]} />
-          </Show>
-        </div>
-      }
-    >
-      <div
-        class="flex-1 min-w-0 min-h-0 flex"
-        classList={{
-          "flex-row": props.split().direction === "row",
-          "flex-col": props.split().direction === "column",
-        }}
-      >
-        <div class="flex min-w-0 min-h-0" style={{ flex: `${props.split().ratio} 1 0%` }}>
-          <PaneTree {...props} node={() => props.split().children[0]} />
-        </div>
-        <PaneDivider split={props.split} region={props.region} size={props.size} />
-        <div class="flex min-w-0 min-h-0" style={{ flex: `${1 - props.split().ratio} 1 0%` }}>
-          <PaneTree {...props} node={() => props.split().children[1]} />
-        </div>
-      </div>
-    </Show>
-  )
-}
-
-function PaneLeaf(props: TreeProps & { id: SessionPane }) {
-  const pane = () => props.region.pane(props.id)
+    return box
+      ? { left: percent(box.x), top: percent(box.y), width: percent(box.w), height: percent(box.h) }
+      : { display: "none" }
+  }
 
   return (
     <div
       data-slot="session-side-pane"
       data-pane={props.id}
-      class="relative flex-1 min-w-0 min-h-0 bg-v2-background-bg-base"
+      class="absolute min-w-0 min-h-0 bg-v2-background-bg-base"
+      style={style()}
     >
       <PaneTabs
-        pane={pane()}
+        pane={props.region.pane(props.id)}
         region={props.region}
         view={props.view}
         screen={props.screen}
@@ -680,38 +666,88 @@ function PaneLeaf(props: TreeProps & { id: SessionPane }) {
   )
 }
 
-function PaneDivider(props: { split: Accessor<PaneSplit>; region: Region; size: Sizing }) {
-  const { tabs } = useSessionLayout()
-  let element: HTMLDivElement | undefined
-  const [box, setBox] = createStore({ width: 0, height: 0 })
+const RATIO_STEP = 0.02
 
-  createResizeObserver(() => element?.parentElement, ({ width, height }) => setBox({ width, height }))
+const RATIO_STEP_LARGE = 0.1
 
-  const total = () => (props.split().direction === "row" ? box.width : box.height)
-  const second = () => Math.round(total() * (1 - props.split().ratio))
-  const min = () => (props.split().direction === "row" ? PANE_WIDTH_MIN : PANE_HEIGHT_MIN)
+function PaneDividerView(props: {
+  divider: Accessor<PaneDivider | undefined>
+  area: { width: number; height: number }
+  region: Region
+  size: Sizing
+}) {
+  const language = useLanguage()
+  const row = () => props.divider()?.direction === "row"
+
+  const total = () => {
+    const divider = props.divider()
+
+    if (!divider) return 0
+
+    return divider.direction === "row" ? props.area.width * divider.split.w : props.area.height * divider.split.h
+  }
+
+  const second = () => Math.round(total() * (1 - (props.divider()?.ratio ?? 0.5)))
+  const min = () => (row() ? PANE_WIDTH_MIN : PANE_HEIGHT_MIN)
   const max = () => Math.max(min(), total() - min())
+
+  const style = () => {
+    const divider = props.divider()
+
+    if (!divider) return { display: "none" }
+    const line = divider.line
+
+    return divider.direction === "row"
+      ? { left: `calc(${percent(line.x)} - 0.5px)`, top: percent(line.y), height: percent(line.h), width: "1px" }
+      : { left: percent(line.x), top: `calc(${percent(line.y)} - 0.5px)`, width: percent(line.w), height: "1px" }
+  }
+
+  // Arrow keys move the divider along its axis, a tenth of the region with Shift. A mirrored row reads them mirrored.
+  const nudge = (event: KeyboardEvent) => {
+    const divider = props.divider()
+
+    if (!divider) return
+    const forward = row() ? "ArrowRight" : "ArrowDown"
+    const backward = row() ? "ArrowLeft" : "ArrowUp"
+    const direction = event.key === forward ? 1 : event.key === backward ? -1 : 0
+
+    if (direction === 0) return
+    const mirrored =
+      row() && event.currentTarget instanceof Element && getComputedStyle(event.currentTarget).direction === "rtl"
+
+    event.preventDefault()
+    props.region.resize(
+      divider.id,
+      divider.ratio + (mirrored ? -direction : direction) * (event.shiftKey ? RATIO_STEP_LARGE : RATIO_STEP),
+    )
+  }
 
   return (
     <div
-      ref={(el) => (element = el)}
-      class="relative shrink-0 bg-v2-border-border-base"
-      classList={{
-        "w-px": props.split().direction === "row",
-        "h-px": props.split().direction === "column",
-      }}
+      data-slot="pane-divider"
+      role="separator"
+      tabIndex={0}
+      aria-orientation={row() ? "vertical" : "horizontal"}
+      aria-label={language.t("session.panes.resize")}
+      aria-valuemin={5}
+      aria-valuemax={95}
+      aria-valuenow={Math.round((props.divider()?.ratio ?? 0.5) * 100)}
+      class="absolute z-10 bg-v2-border-border-base outline-none focus-visible:bg-v2-icon-icon-accent"
+      style={style()}
       onPointerDown={() => props.size.start()}
+      onKeyDown={nudge}
     >
       <ResizeHandle
-        class={props.split().direction === "row" ? "-mx-1" : "-my-1"}
-        direction={props.split().direction === "row" ? "horizontal" : "vertical"}
+        direction={row() ? "horizontal" : "vertical"}
         edge="start"
         size={second()}
         min={min()}
         max={max()}
         onResize={(value) => {
           props.size.touch()
-          if (total() > 0) tabs().ratio(props.split().id, 1 - value / total())
+          const divider = props.divider()
+
+          if (divider && total() > 0) props.region.resize(divider.id, 1 - value / total())
         }}
       />
     </div>
