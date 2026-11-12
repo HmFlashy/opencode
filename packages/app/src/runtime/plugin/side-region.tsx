@@ -33,6 +33,8 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { same } from "@/runtime/persistence/equality"
 import { useLayout } from "@/shell/state/layout"
 import { useSessionLayout } from "@/session/session-layout"
+import type { SessionPane } from "@/shell/state/session-tabs"
+import { paneGeometry, type Box, type PaneDivider } from "./pane-geometry"
 import type { Sizing } from "@/session/helpers"
 import { PanelTrigger } from "./panel-trigger"
 import { createSessionPanelMenuEntries, type SessionPanelMenuEntry } from "./panel-menu"
@@ -44,8 +46,9 @@ import { ClosedTabsSection, NewTabButton } from "./closed-tabs-view"
 import type { PaneDrag } from "./pane-drag"
 
 const PANE_HEIGHT_MIN = 120
+const PANE_WIDTH_MIN = 200
 
-/** The side region: the side pane, the pane split below it, and the inner sidebar. */
+/** The side region: its tree of panes, and the inner sidebar. */
 export function SideRegion(props: {
   view: MountedSession
   screen: SessionScreen
@@ -72,29 +75,15 @@ export function SideRegion(props: {
     tabsOpen() && layout.ready() && props.region.empty() ? props.view.key : undefined,
   )
 
-  createEffect(on(starting, (key) => key && props.region.openNewTab("side")))
+  createEffect(on(starting, (key) => key && props.region.openNewTab(props.region.panes()[0])))
 
-  // The split pane shows while it holds tabs; when the side pane has none, the split pane takes the whole height.
-  const panes = createMemo(() => {
-    const split = props.region.pane("split").keys().length > 0
-
-    if (!split) return ["side"] as const
-
-    if (props.region.pane("side").keys().length === 0) return ["split"] as const
-
-    return ["side", "split"] as const
-  })
-
-  const [column, setColumn] = createStore({ height: 0 })
   const [root, setRoot] = createSignal<HTMLElement>()
-  let stack: HTMLDivElement | undefined
 
-  createResizeObserver(
-    () => stack,
-    ({ height }) => setColumn({ height }),
+  // The pane that carries the plugins' strip actions and the empty state: the first one holding a tab, since an empty
+  // pane is not drawn.
+  const primary = createMemo(
+    () => props.region.panes().find((id) => props.region.pane(id).entries().length > 0) ?? props.region.panes()[0],
   )
-
-  const lowerHeight = createMemo(() => Math.round(column.height * (1 - view().split.ratio())))
 
   guardClosingFocus({
     root,
@@ -124,55 +113,18 @@ export function SideRegion(props: {
             class="h-full flex shrink-0 contain-strict"
             style={{ width: "var(--panel-hold-width, var(--session-side-content-width, 100%))" }}
           >
-            <div
-              ref={stack}
-              class="relative min-w-0 h-full flex-1 flex flex-col overflow-hidden bg-v2-background-bg-base"
-            >
-              <For each={panes()}>
-                {(pane, index) => (
-                  <div
-                    data-slot="session-side-pane"
-                    data-pane={pane}
-                    class="relative min-h-0 min-w-0 bg-v2-background-bg-base"
-                    classList={{
-                      "flex-1": panes().length === 1 || index() === 0,
-                      "shrink-0 border-t border-v2-border-border-base": index() > 0,
-                    }}
-                    style={index() > 0 ? { height: `${lowerHeight()}px` } : undefined}
-                  >
-                    <Show when={index() > 0}>
-                      <div onPointerDown={() => props.size.start()}>
-                        <ResizeHandle
-                          direction="vertical"
-                          edge="start"
-                          size={lowerHeight()}
-                          min={PANE_HEIGHT_MIN}
-                          max={Math.max(PANE_HEIGHT_MIN, column.height - PANE_HEIGHT_MIN)}
-                          onResize={(height) => {
-                            props.size.touch()
-
-                            if (column.height > 0) view().split.resize(1 - height / column.height)
-                          }}
-                        />
-                      </div>
-                    </Show>
-                    <PaneTabs
-                      pane={props.region.pane(pane)}
-                      region={props.region}
-                      view={props.view}
-                      screen={props.screen}
-                      sidebar={props.sidebar}
-                      shown={tabsOpen}
-                      present={tabsVisible}
-                      animate={() => !props.size.active()}
-                      placeholder={index() === 0}
-                      actions={index() === 0}
-                      drag={props.drag}
-                    />
-                  </div>
-                )}
-              </For>
-            </div>
+            <PaneArea
+              region={props.region}
+              view={props.view}
+              screen={props.screen}
+              sidebar={props.sidebar}
+              shown={tabsOpen}
+              present={tabsVisible}
+              animate={() => !props.size.active()}
+              drag={props.drag}
+              size={props.size}
+              primary={primary}
+            />
           </div>
         </Show>
       </aside>
@@ -621,5 +573,183 @@ function LauncherRow(props: { item: SessionPanelMenuItem; onChoose: () => void }
         <Keybind keys={keybind()} variant="neutral" />
       </Show>
     </button>
+  )
+}
+type AreaProps = {
+  region: Region
+  view: MountedSession
+  screen: SessionScreen
+  sidebar: PanelSidebar
+  shown: Accessor<boolean>
+  present: Accessor<boolean>
+  animate: Accessor<boolean>
+  drag: PaneDrag
+  size: Sizing
+  primary: Accessor<SessionPane | undefined>
+}
+
+const percent = (value: number) => `${value * 100}%`
+
+/**
+ * The side region's panes. Each pane is placed by its box instead of nested in the tree, and listed by id, so a pane
+ * keeps its DOM, and the terminals and editors mounted in it, when a split or a close reshapes the tree around it.
+ */
+function PaneArea(props: AreaProps) {
+  const [area, setArea] = createStore({ width: 0, height: 0 })
+  let element: HTMLDivElement | undefined
+
+  createResizeObserver(
+    () => element,
+    ({ width, height }) => setArea({ width, height }),
+  )
+
+  // An empty pane takes no room, unless it shows a New tab view.
+  const geometry = createMemo(() =>
+    paneGeometry(props.region.layout(), (id) => props.region.pane(id).entries().length > 0 || props.region.newTab(id)),
+  )
+
+  const panes = createMemo(() => geometry().panes.map((pane) => pane.id), [], { equals: same })
+  const dividers = createMemo(() => geometry().dividers.map((divider) => divider.id), [], { equals: same })
+
+  return (
+    <div
+      ref={(el) => (element = el)}
+      class="relative min-w-0 h-full flex-1 overflow-hidden bg-v2-background-bg-base"
+    >
+      <For each={panes()}>
+        {(id) => <PaneLeaf {...props} id={id} box={() => geometry().panes.find((pane) => pane.id === id)?.box} />}
+      </For>
+      <For each={dividers()}>
+        {(id) => (
+          <PaneDividerView
+            divider={() => geometry().dividers.find((divider) => divider.id === id)}
+            area={area}
+            region={props.region}
+            size={props.size}
+          />
+        )}
+      </For>
+    </div>
+  )
+}
+
+function PaneLeaf(props: AreaProps & { id: SessionPane; box: Accessor<Box | undefined> }) {
+  const style = () => {
+    const box = props.box()
+
+    return box
+      ? { left: percent(box.x), top: percent(box.y), width: percent(box.w), height: percent(box.h) }
+      : { display: "none" }
+  }
+
+  return (
+    <div
+      data-slot="session-side-pane"
+      data-pane={props.id}
+      class="absolute min-w-0 min-h-0 bg-v2-background-bg-base"
+      style={style()}
+    >
+      <PaneTabs
+        pane={props.region.pane(props.id)}
+        region={props.region}
+        view={props.view}
+        screen={props.screen}
+        sidebar={props.sidebar}
+        shown={props.shown}
+        present={props.present}
+        animate={props.animate}
+        placeholder={props.primary() === props.id}
+        actions={props.primary() === props.id}
+        drag={props.drag}
+      />
+    </div>
+  )
+}
+
+const RATIO_STEP = 0.02
+
+const RATIO_STEP_LARGE = 0.1
+
+function PaneDividerView(props: {
+  divider: Accessor<PaneDivider | undefined>
+  area: { width: number; height: number }
+  region: Region
+  size: Sizing
+}) {
+  const language = useLanguage()
+  const row = () => props.divider()?.direction === "row"
+
+  const total = () => {
+    const divider = props.divider()
+
+    if (!divider) return 0
+
+    return divider.direction === "row" ? props.area.width * divider.split.w : props.area.height * divider.split.h
+  }
+
+  const second = () => Math.round(total() * (1 - (props.divider()?.ratio ?? 0.5)))
+  const min = () => (row() ? PANE_WIDTH_MIN : PANE_HEIGHT_MIN)
+  const max = () => Math.max(min(), total() - min())
+
+  const style = () => {
+    const divider = props.divider()
+
+    if (!divider) return { display: "none" }
+    const line = divider.line
+
+    return divider.direction === "row"
+      ? { left: `calc(${percent(line.x)} - 0.5px)`, top: percent(line.y), height: percent(line.h), width: "1px" }
+      : { left: percent(line.x), top: `calc(${percent(line.y)} - 0.5px)`, width: percent(line.w), height: "1px" }
+  }
+
+  // Arrow keys move the divider along its axis, a tenth of the region with Shift. A mirrored row reads them mirrored.
+  const nudge = (event: KeyboardEvent) => {
+    const divider = props.divider()
+
+    if (!divider) return
+    const forward = row() ? "ArrowRight" : "ArrowDown"
+    const backward = row() ? "ArrowLeft" : "ArrowUp"
+    const direction = event.key === forward ? 1 : event.key === backward ? -1 : 0
+
+    if (direction === 0) return
+    const mirrored =
+      row() && event.currentTarget instanceof Element && getComputedStyle(event.currentTarget).direction === "rtl"
+
+    event.preventDefault()
+    props.region.resize(
+      divider.id,
+      divider.ratio + (mirrored ? -direction : direction) * (event.shiftKey ? RATIO_STEP_LARGE : RATIO_STEP),
+    )
+  }
+
+  return (
+    <div
+      data-slot="pane-divider"
+      role="separator"
+      tabIndex={0}
+      aria-orientation={row() ? "vertical" : "horizontal"}
+      aria-label={language.t("session.panes.resize")}
+      aria-valuemin={5}
+      aria-valuemax={95}
+      aria-valuenow={Math.round((props.divider()?.ratio ?? 0.5) * 100)}
+      class="absolute z-10 bg-v2-border-border-base outline-none focus-visible:bg-v2-icon-icon-accent"
+      style={style()}
+      onPointerDown={() => props.size.start()}
+      onKeyDown={nudge}
+    >
+      <ResizeHandle
+        direction={row() ? "horizontal" : "vertical"}
+        edge="start"
+        size={second()}
+        min={min()}
+        max={max()}
+        onResize={(value) => {
+          props.size.touch()
+          const divider = props.divider()
+
+          if (divider && total() > 0) props.region.resize(divider.id, 1 - value / total())
+        }}
+      />
+    </div>
   )
 }

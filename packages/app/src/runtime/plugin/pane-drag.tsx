@@ -1,12 +1,21 @@
 import { Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
-import { SESSION_PANES, type SessionPane } from "@/shell/state/session-tabs"
+import { type SessionPane } from "@/shell/state/session-tabs"
 
 type Rect = { left: number; top: number; width: number; height: number }
 
 /** Where a dragged tab lands: before a tab in a pane's strip (its end without `before`), or in a pane. */
-export type PaneDropTarget = { pane: SessionPane; before?: string; strip: boolean; rect: Rect }
+export type PaneDropTarget = {
+  pane: SessionPane
+  before?: string
+  strip: boolean
+  rect: Rect
+  /** When set, dropping splits `pane` in this direction and puts the tab in the new leaf. */
+  split?: "row" | "column"
+  /** With `split`, the new pane goes before `pane` (left or above) instead of after it. */
+  first?: boolean
+}
 
 /**
  * Drags side and bottom panel tabs between panes. The strips and pane bodies mark themselves with `data-pane-strip`,
@@ -17,6 +26,8 @@ export type PaneDropTarget = { pane: SessionPane; before?: string; strip: boolea
 export function createPaneDrag(input: {
   /** Panes that hold tabs; a pane without them is created by dropping on its zone. */
   shown: (pane: SessionPane) => boolean
+  /** Whether `key` is the only tab of `pane`: splitting it off would close the pane, so no split zone is offered. */
+  solo: (key: string, pane: SessionPane) => boolean
   drop: (key: string, target: PaneDropTarget) => void
 }) {
   const [state, setState] = createStore<{
@@ -75,13 +86,25 @@ export function createPaneDrag(input: {
 
     if (content && contentPane) {
       const rect = content.getBoundingClientRect()
+      const w = rect.width
+      const h = rect.height
+      const qx = rect.left + w / 4
+      const qx2 = rect.right - w / 4
+      const qy = rect.top + h / 4
+      const qy2 = rect.bottom - h / 4
 
-      if (contentPane === "side" && !input.shown("split") && y > rect.top + rect.height / 2)
-        return {
-          pane: "split",
-          strip: false,
-          rect: { left: rect.left, top: rect.top + rect.height / 2, width: rect.width, height: rect.height / 2 },
-        }
+      // Dropping on a quarter splits the pane; the centre moves the tab into it.
+      // The bottom pane sits outside the pane tree, so only the tree's panes split.
+      if (contentPane !== "bottom" && !input.solo(key, contentPane) && (x < qx || x > qx2 || y < qy || y > qy2)) {
+        const split = x < qx || x > qx2 ? "row" : "column"
+        const onSecond = split === "row" ? x > rect.left + w / 2 : y > rect.top + h / 2
+        const half =
+          split === "row"
+            ? { left: onSecond ? rect.left + w / 2 : rect.left, top: rect.top, width: w / 2, height: h }
+            : { left: rect.left, top: onSecond ? rect.top + h / 2 : rect.top, width: w, height: h / 2 }
+
+        return { pane: contentPane, strip: false, split, first: !onSecond, rect: half }
+      }
 
       return { pane: contentPane, strip: false, rect: toRect(rect) }
     }
@@ -166,6 +189,7 @@ export function createPaneDrag(input: {
                 <div
                   data-slot={target().strip ? "pane-drop-indicator" : "pane-drop-zone"}
                   data-pane={target().pane}
+                  data-split={target().split}
                   class="absolute"
                   classList={{
                     "bg-v2-icon-icon-accent rounded-full": target().strip,
@@ -196,8 +220,8 @@ export function createPaneDrag(input: {
 
 export type PaneDrag = ReturnType<typeof createPaneDrag>
 
-function paneOf(value: string | undefined) {
-  return SESSION_PANES.find((pane) => pane === value)
+function paneOf(value: string | undefined): SessionPane | undefined {
+  return value ? (value as SessionPane) : undefined
 }
 
 /** The element's on-screen rect: its bounding rect clipped by every ancestor that clips overflow. */

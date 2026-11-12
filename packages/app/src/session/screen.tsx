@@ -110,9 +110,15 @@ function SessionScreenContent(props: {
 
   const drag = createPaneDrag({
     shown: (pane) => (pane === "bottom" ? bottomOpen() : region.pane(pane).keys().length > 0),
+    solo: (key, pane) => {
+      const keys = region.pane(pane).keys()
+
+      return keys.length === 1 && keys[0] === key
+    },
     drop: (key, target) =>
       batch(() => {
-        session.layout.tabs().move(key, target.pane, target.before)
+        if (target.split) session.layout.tabs().split(key, target.pane, target.split, { first: target.first })
+        else session.layout.tabs().move(key, target.pane, target.before)
 
         if (target.pane === "bottom") session.layout.view().bottom.setOpened(true)
       }),
