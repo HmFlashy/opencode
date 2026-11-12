@@ -56,7 +56,8 @@ export function createSessionComposerController(input: {
   // the editor's DOM commit, without reacting to subsequent cursor or message updates.
   createEffect(
     on(adapter.ready, (ready) => {
-      if (!ready) return
+      // Focusing the editor opens the on-screen keyboard, which would cover the session just opened by a tap.
+      if (!ready || window.matchMedia("(pointer: coarse)").matches) return
 
       const frame = requestAnimationFrame(() => {
         if (!editor?.isConnected || !region.showComposer() || region.child() || dialog.active) return
