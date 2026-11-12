@@ -9,6 +9,8 @@ import {
   type MountedSession,
   type Router,
   type Servers,
+  type Context,
+  type SessionRef,
   type SessionScreen,
   type Ipc,
   type IpcClient,
@@ -47,6 +49,17 @@ import { LanguageProvider } from "../src/runtime/i18n/language"
 import { ExtensionPlugins } from "../src/runtime/plugin/extension-plugins"
 import { SessionPluginPills } from "../src/session/composer/plugin-pills"
 import { ui } from "../src/runtime/plugin/ui"
+import {
+  moveSessionTab,
+  paneLeaves,
+  sessionPaneLayout,
+  sessionPaneTab,
+  sessionTabPane,
+  splitSessionTab,
+  type SessionTabs,
+} from "../src/shell/state/session-tabs"
+
+export { moveSessionTab, opensBeside, splitSessionTab } from "../src/shell/state/session-tabs"
 
 export {
   bindPlugin,
@@ -629,7 +642,7 @@ export function mountComposerPills(input: { definitions: readonly Entry[] }) {
  * toast region. `attach()` mounts a stand-in for the interface: its layout records each write and reports a tab it
  * opened as visible, its server is the local one, and its mono font is "fixture mono".
  */
-export function mountHostApis(input: { definitions: readonly Entry[] }) {
+export function mountHostApis(input: { definitions: readonly Entry[]; layout?: Partial<Interface["layout"]> }) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const writes: string[] = []
@@ -649,6 +662,7 @@ export function mountHostApis(input: { definitions: readonly Entry[] }) {
       toggle: (key) => void writes.push(`toggle ${key}`),
       state: (key) => (opened().includes(key) ? "visible" : "closed"),
       scroll: { get: () => undefined, set: (_session, key) => void writes.push(`scroll ${key}`) },
+      ...input.layout,
     },
     settings: (page) => void writes.push(`settings ${page}`),
   })
@@ -687,4 +701,78 @@ export function mountHostApis(input: { definitions: readonly Entry[] }) {
       container.remove()
     },
   }
+}
+
+/**
+ * The real host APIs over a stand-in app layout that runs the real pane model on one session's strip. Its `panes`
+ * projection mirrors the app's (`createPluginAttachment`, which needs the whole provider tree); `open` only records
+ * its call. `located: false` gives the session no location; `attach: false` leaves the interface unmounted.
+ */
+export async function mountPanes(seed: SessionTabs, options: { located?: boolean; attach?: boolean } = {}) {
+  const located = options.located ?? true
+  const fake = {
+    key: "fixture\na",
+    id: "a",
+    tab: "a",
+    pending: false,
+    location: located ? { directory: "/repo" } : undefined,
+  }
+  // SAFETY: the stand-in layout reads only `key` and `location`; the host APIs pass the session through.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- see SAFETY above
+  const session = fake as unknown as SessionRef
+  const [strip, setStrip] = createSignal(seed)
+  const calls: string[] = []
+  const kept: { ctx?: Context } = {}
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+  const write = (key: string, next: (current: SessionTabs) => SessionTabs) => {
+    const current = strip()
+
+    if (!located || !current.all.includes(key)) return
+    setStrip(next(current))
+  }
+
+  const model: Partial<Interface["layout"]> = {
+    panes() {
+      if (!located) return []
+      const state = strip()
+
+      return paneLeaves(sessionPaneLayout(state)).map((id) => {
+        const tabs = state.all.filter((key) => sessionTabPane(state, key) === id)
+        const shown = sessionPaneTab(state, id)
+
+        return { id, tabs, shown: shown !== undefined && tabs.includes(shown) ? shown : undefined }
+      })
+    },
+    place(key, _session, pane, placement) {
+      calls.push(`place ${key} ${pane}${placement?.before ? ` before ${placement.before}` : ""}`)
+      write(key, (current) => moveSessionTab(current, key, pane, placement?.before))
+    },
+    split(key, _session, placement) {
+      calls.push(`split ${key} ${placement.direction} ${placement.pane ?? "-"}`)
+      write(key, (current) => splitSessionTab(current, key, placement))
+    },
+    open(key, _session, placement) {
+      calls.push(`open ${key} ${JSON.stringify(placement ?? {})}`)
+    },
+  }
+
+  const host = mountHostApis({
+    definitions: [{ id: "fixture", windowEntry: async () => ({ default: (ctx: Context) => void (kept.ctx = ctx) }) }],
+    layout: model,
+  })
+
+  await until(() => host.status("fixture") === "active")
+
+  const attach = async () => {
+    host.attach()
+    await settle()
+  }
+
+  if (options.attach !== false) await attach()
+
+  // SAFETY: the plugin's setup ran once the fixture became active.
+  const layout = kept.ctx!.layout
+
+  return { layout, direct: model, session, strip, calls, attach, unmount: host.unmount }
 }

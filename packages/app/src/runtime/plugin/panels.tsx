@@ -3,9 +3,11 @@ import {
   createEffect,
   createMemo,
   For,
+  getOwner,
   mergeProps,
   on,
   onCleanup,
+  runWithOwner,
   Show,
   type Accessor,
   type JSX,
@@ -219,17 +221,32 @@ export function createRegion(input: {
     ]
   })
 
-  // A pinned tab shows in the side pane. A listed tab the strip does not store, e.g. a terminal another session opened,
+  const layout = createMemo(() => sessionPaneLayout(input.tabs().tabs()))
+
+  // The first pane of the tree: where pinned tabs, the fallback selection and a new tab view go. It is `side` until
+  // `side` closes, then whichever pane comes first.
+  const firstPane = () => paneLeaves(layout())[0] ?? "side"
+
+  // A pane a stored tab names that the tree no longer has (a stale store) shows with the first pane instead of nowhere.
+  const known = (pane: SessionPane) => pane === "bottom" || paneLeaves(layout()).includes(pane)
+
+  // A pinned tab shows in the first pane. A listed tab the strip does not store, e.g. a terminal another session opened,
   // belongs with its plugin's last stored tab, so a grouped render stays in one pane.
   const paneOf = (entry: RegionEntry): SessionPane => {
     const tabs = input.tabs().tabs()
 
-    if (entry.tab.pinned) return "side"
+    if (entry.tab.pinned) return firstPane()
 
-    if (tabs.all.includes(entry.key)) return sessionTabPane(tabs, entry.key)
+    if (tabs.all.includes(entry.key)) {
+      const pane = sessionTabPane(tabs, entry.key)
+
+      return known(pane) ? pane : firstPane()
+    }
+
     const sibling = tabs.all.findLast((key) => key.startsWith(`${entry.plugin}:`))
+    const pane = sibling ? sessionTabPane(tabs, sibling) : firstPane()
 
-    return sibling ? sessionTabPane(tabs, sibling) : "side"
+    return known(pane) ? pane : firstPane()
   }
 
   // Narrow screens never select a transient tab: a stored one falls back like a missing tab.
@@ -241,7 +258,7 @@ export function createRegion(input: {
     if (value && strip().some((entry) => entry.key === value && (desktop() || !entry.tab.transient))) return value
 
     const eligible = strip().filter(
-      (entry) => paneOf(entry) === "side" && entry.tab.fallback && (desktop() || !entry.tab.transient),
+      (entry) => paneOf(entry) === firstPane() && entry.tab.fallback && (desktop() || !entry.tab.transient),
     )
 
     return [
@@ -281,7 +298,7 @@ export function createRegion(input: {
 
       if (shown && members.some((entry) => entry.key === shown && (desktop() || !entry.tab.transient))) return shown
 
-      if (pane !== "side") return members[0]?.key
+      if (pane !== firstPane()) return members[0]?.key
       const eligible = members.filter((entry) => entry.tab.fallback && (desktop() || !entry.tab.transient))
 
       return [
@@ -312,25 +329,25 @@ export function createRegion(input: {
   }
 
   // Panes come and go with the tree, so each id keeps one pane for the region's lifetime: a pane that reappears keeps the
-  // mounted panels of its tabs.
+  // mounted panels of its tabs. A pane's memos belong to the region: made under whichever component asked first, they
+  // would be disposed with it and stop updating while the cache kept handing them out.
+  const owner = getOwner()
   const byPane = new Map<SessionPane, RegionPane>()
   const paneFor = (id: SessionPane): RegionPane => {
     const known = byPane.get(id)
 
     if (known) return known
-    const created = createPane(id)
+    const created = runWithOwner(owner, () => createPane(id))!
 
     byPane.set(id, created)
 
     return created
   }
 
-  const layout = createMemo(() => sessionPaneLayout(input.tabs().tabs()))
-
   const activePane = createMemo(() => {
     const entry = byKey().get(active() ?? "")
 
-    return entry ? paneOf(entry) : "side"
+    return entry ? paneOf(entry) : firstPane()
   })
 
   // The host's new tab views: each shows in a pane, over the session and selection it opened over, so a tab that opens

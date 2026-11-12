@@ -47,7 +47,14 @@ import { openNotificationSession } from "@/shell/notifications/notification"
 import { playSoundById } from "@/shell/notifications/sound"
 import { showToast } from "@/shell/notifications/toast"
 import { useCurrentRoute, useLayout } from "@/shell/state/layout"
-import { paneLeaves, sessionPaneTab, sessionTabPane, type SessionPane } from "@/shell/state/session-tabs"
+import {
+  opensBeside,
+  paneLeaves,
+  sessionPaneLayout,
+  sessionPaneTab,
+  sessionTabPane,
+  type SessionPane,
+} from "@/shell/state/session-tabs"
 import { terminalFontFamily, useSettings } from "@/settings/model"
 import { useSettingsSurface } from "@/settings/surface"
 import { formatKeybindParts, useCommand } from "@/shell/commands/command"
@@ -407,9 +414,9 @@ export function createHostApis() {
       hide: (key, session) => write((value) => value.layout.hide(key, session)),
       state: (key, session) => current()?.layout.state(key, session) ?? "closed",
       stored: (session) => current()?.layout.stored(plugin, session) ?? [],
-      panes: () => [],
-      place() {},
-      split() {},
+      panes: (session) => current()?.layout.panes(session) ?? [],
+      place: (key, session, pane, options) => write((value) => value.layout.place(key, session, pane, options)),
+      split: (key, session, options) => write((value) => value.layout.split(key, session, options)),
       side: {
         opened: (session) => current()?.layout.side.opened(session) ?? false,
         toggle: (session) => write((value) => value.layout.side.toggle(session)),
@@ -778,28 +785,32 @@ export function createPluginAttachment(apis: HostApis) {
     if (!value) return located.hold(session, () => open(key, session, options))
     const placement = options?.tab ?? "open"
 
-    const placement2 = options?.pane || options?.split
+    // Decided before any write, while the strip still shows whether the tab is new to it.
+    const beside =
+      !options?.pane &&
+      !options?.split &&
+      placement !== "append" &&
+      placement !== "preview" &&
+      !narrow() &&
+      !layout.panel.targeted(value) &&
+      opensBeside(layout.panel.state(value), key)
 
     const applyPlacement = () => {
-      if (placement2) {
-        if (options?.split) split(key, session, { direction: options.split, pane: options.pane })
-        else if (options?.pane) place(key, session, options.pane)
-        return
-      }
-      // Opens a panel beside the current one so the user can see both, unless told otherwise.
-      if (placement === "append") return
-      const state = layout.panel.state(value)
-      const pane = sessionTabPane(state, key)
-      if (pane === "bottom") return
-      if (state.all.filter((tab) => sessionTabPane(state, tab) !== "bottom").length > 1)
-        split(key, session, { direction: "row", pane })
+      if (options?.split) return split(key, session, { direction: options.split, pane: options.pane })
+      if (options?.pane) return place(key, session, options.pane)
+
+      if (beside) split(key, session, { direction: "row", pane: sessionTabPane(layout.panel.state(value), key) })
     }
 
     // An append adds the tab quietly: no selection, no region change, no preview replacement.
     if (placement === "append")
       return batch(() => {
+        const active = layout.panel.state(value).active
+
         layout.panel.append(value, key)
         applyPlacement()
+
+        if (active !== undefined && layout.panel.state(value).active !== active) layout.panel.focus(value, active)
       })
 
     // A select keeps the narrow-screen view, as a background open does, and shows the tab's pane too.
@@ -838,14 +849,19 @@ export function createPluginAttachment(apis: HostApis) {
     const value = stateKey(session)
 
     if (!value) return located.hold(session, () => place(key, session, pane, options))
-    layout.tabs(value).move(key, pane, options?.before)
+    layout.panel.move(value, key, pane, options?.before)
   }
 
   const split = (key: string, session: SessionRef, options: { direction: "row" | "column"; pane?: string }) => {
     const value = stateKey(session)
 
     if (!value) return located.hold(session, () => split(key, session, options))
-    layout.tabs(value).split(key, options.pane ?? sessionTabPane(layout.panel.state(value), key), options.direction)
+    layout.panel.split(
+      value,
+      key,
+      options.pane ?? sessionTabPane(layout.panel.state(value), key),
+      options.direction,
+    )
   }
 
   const close = (key: string, session: SessionRef) => {
@@ -1140,7 +1156,7 @@ export function createPluginAttachment(apis: HostApis) {
         if (!value) return []
         const state = layout.panel.state(value)
 
-        return paneLeaves(layout.tabs(value).layout()).map((id) => {
+        return paneLeaves(sessionPaneLayout(state)).map((id) => {
           const tabs = state.all.filter((key) => sessionTabPane(state, key) === id)
           const shown = sessionPaneTab(state, id)
 

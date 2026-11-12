@@ -1,6 +1,6 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "@playwright/test"
 import { fileDiff, openSession } from "../utils/workspace"
-import { openReviewLauncher } from "../utils/side-panel"
+import { dragTab, dropTab, leaf, openReviewLauncher, paneTabs, split, storedStrip, type PaneTreeSeed } from "../utils/side-panel"
 import { base64Encode } from "@opencode/util/encode"
 
 test("review content stays aligned with the side region in both directions", async ({ page }) => {
@@ -246,4 +246,418 @@ test("the new tab view lists recently closed tabs, expands to the rest, and keep
   await panel.getByRole("button", { name: "Add tab", exact: true }).click()
   await expect(rows.first()).toContainText("closed-00.ts")
   await expect(recent).not.toContainText("README.md")
+})
+
+
+type Strip = {
+  all: string[]
+  active?: string
+  panes?: Record<string, string>
+  selected?: Record<string, string>
+  layout?: PaneTreeSeed
+  serial?: number
+}
+
+async function openPanes(page: Page, name: string, strip: Strip) {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  const directory = `C:/OpenCode/${name}`
+  const session = `ses_${name.toLowerCase()}`
+
+  await openSession(page, {
+    name,
+    fileList: () => [],
+    fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
+    seed: { panes: { [session]: { review: true } }, storage: paneTabs(directory, session, strip) },
+  })
+
+  return { directory, session }
+}
+
+const paneBox = async (locator: Locator) => {
+  const box = await locator.boundingBox()
+  if (!box) throw new Error("Pane is not visible")
+
+  return box
+}
+
+const pane = (page: Page, id: string) => page.locator(`[data-pane-content="${id}"]`)
+
+const tabIn = (page: Page, id: string, name: string) => pane(page, id).getByRole("tab", { name, exact: true })
+
+test("a stored row split shows two panes side by side at its ratio", async ({ page }) => {
+  await openPanes(page, "PaneRow", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.3, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  await expect(tabIn(page, "side", "a.md")).toHaveAttribute("aria-selected", "true")
+  await expect(tabIn(page, "p1", "b.md")).toHaveAttribute("aria-selected", "true")
+
+  await expect
+    .poll(async () => {
+      const side = await paneBox(pane(page, "side"))
+      const right = await paneBox(pane(page, "p1"))
+
+      return {
+        beside: right.x >= side.x + side.width - 1,
+        aligned: Math.abs(right.y - side.y) <= 1 && Math.abs(right.height - side.height) <= 1,
+        share: Math.round((side.width / (side.width + right.width)) * 10) / 10,
+      }
+    })
+    .toEqual({ beside: true, aligned: true, share: 0.3 })
+})
+
+test("a legacy side and split strip still stacks the split pane below the side pane", async ({ page }) => {
+  await openPanes(page, "PaneLegacy", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "split" },
+    selected: { side: "file://a.md", split: "file://b.md" },
+  })
+
+  await expect(tabIn(page, "split", "b.md")).toBeVisible()
+
+  await expect
+    .poll(async () => {
+      const top = await paneBox(pane(page, "side"))
+      const bottom = await paneBox(pane(page, "split"))
+
+      return { below: bottom.y >= top.y + top.height - 1, sameWidth: Math.abs(top.width - bottom.width) <= 1 }
+    })
+    .toEqual({ below: true, sameWidth: true })
+})
+
+test("nested splits give each pane its own cell", async ({ page }) => {
+  await openPanes(page, "PaneNested", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1", "file://c.md": "p2" },
+    selected: { side: "file://a.md", p1: "file://b.md", p2: "file://c.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), split("split:p2", "column", 0.5, leaf("p1"), leaf("p2"))),
+    serial: 2,
+  })
+
+  await expect(tabIn(page, "p2", "c.md")).toBeVisible()
+
+  await expect
+    .poll(async () => {
+      const side = await paneBox(pane(page, "side"))
+      const top = await paneBox(pane(page, "p1"))
+      const bottom = await paneBox(pane(page, "p2"))
+
+      return {
+        rightOfSide: top.x >= side.x + side.width - 1 && bottom.x >= side.x + side.width - 1,
+        stacked: bottom.y >= top.y + top.height - 1,
+        sameColumn: Math.abs(top.x - bottom.x) <= 1 && Math.abs(top.width - bottom.width) <= 1,
+        fullHeight: Math.abs(top.height + bottom.height - side.height) <= 2,
+      }
+    })
+    .toEqual({ rightOfSide: true, stacked: true, sameColumn: true, fullHeight: true })
+})
+
+test("dragging a split's divider resizes its panes and the ratio survives a reload", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneResize", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  const handle = page.locator('#review-panel [data-slot="pane-divider"] [data-component="resize-handle"]')
+  await expect(handle).toHaveCount(1)
+  const before = await paneBox(pane(page, "side"))
+  const grip = await paneBox(handle)
+
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip.x + grip.width / 2 + 120, grip.y + grip.height / 2, { steps: 8 })
+  await page.mouse.up()
+
+  await expect.poll(async () => Math.round((await paneBox(pane(page, "side"))).width - before.width)).toBeGreaterThan(100)
+  const resized = await paneBox(pane(page, "side"))
+  const stored = await storedStrip(page, directory, session)
+  expect((stored?.layout as { ratio?: number } | undefined)?.ratio).toBeGreaterThan(0.5)
+
+  await page.reload()
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  await expect.poll(async () => Math.abs((await paneBox(pane(page, "side"))).width - resized.width)).toBeLessThanOrEqual(2)
+})
+
+test("a divider stops at the minimum pane size", async ({ page }) => {
+  await openPanes(page, "PaneMinimum", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  const handle = page.locator('#review-panel [data-slot="pane-divider"] [data-component="resize-handle"]')
+  const grip = await paneBox(handle)
+
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip.x - 2_000, grip.y + grip.height / 2, { steps: 10 })
+  await page.mouse.up()
+
+  await expect.poll(async () => (await paneBox(pane(page, "side"))).width).toBeGreaterThanOrEqual(199)
+  expect((await paneBox(pane(page, "side"))).width).toBeLessThan(260)
+})
+
+test("dragging a tab onto a pane's right edge splits it into a new pane beside it", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneDragRight", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await expect(tabIn(page, "side", "b.md")).toBeVisible()
+  await dragTab(page, tabIn(page, "side", "b.md"), pane(page, "side"), { x: 0.92, y: 0.5 })
+
+  const zone = page.locator('[data-slot="pane-drop-zone"]')
+  await expect(zone).toHaveAttribute("data-split", "row")
+  const side = await paneBox(pane(page, "side"))
+  const preview = await paneBox(zone)
+  expect(preview.x).toBeGreaterThanOrEqual(side.x + side.width / 2 - 2)
+  expect(Math.abs(preview.width - side.width / 2)).toBeLessThanOrEqual(2)
+
+  await dropTab(page)
+  await expect(zone).toHaveCount(0)
+  await expect(tabIn(page, "p1", "b.md")).toHaveAttribute("aria-selected", "true")
+  await expect(tabIn(page, "side", "a.md")).toBeVisible()
+  await expect(tabIn(page, "side", "b.md")).toHaveCount(0)
+
+  const left = await paneBox(pane(page, "side"))
+  const right = await paneBox(pane(page, "p1"))
+  expect(right.x).toBeGreaterThanOrEqual(left.x + left.width - 1)
+
+  const stored = await storedStrip(page, directory, session)
+  expect(stored?.panes).toEqual({ "file://b.md": "p1" })
+  expect(stored?.serial).toBe(1)
+
+  await page.reload()
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  await expect(tabIn(page, "side", "a.md")).toBeVisible()
+})
+
+test("dragging a tab onto the left edge puts the new pane before the pane it splits", async ({ page }) => {
+  await openPanes(page, "PaneDragLeft", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await dragTab(page, tabIn(page, "side", "b.md"), pane(page, "side"), { x: 0.08, y: 0.5 })
+  await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveAttribute("data-split", "row")
+  await dropTab(page)
+
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  await expect.poll(async () => (await paneBox(pane(page, "p1"))).x).toBeLessThan((await paneBox(pane(page, "side"))).x)
+})
+
+test("dragging a tab onto the bottom edge stacks a new pane below, and the top edge above", async ({ page }) => {
+  await openPanes(page, "PaneDragColumn", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await dragTab(page, tabIn(page, "side", "b.md"), pane(page, "side"), { x: 0.5, y: 0.92 })
+  await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveAttribute("data-split", "column")
+  await dropTab(page)
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  await expect.poll(async () => (await paneBox(pane(page, "p1"))).y).toBeGreaterThan((await paneBox(pane(page, "side"))).y)
+
+  await dragTab(page, tabIn(page, "side", "c.md"), pane(page, "side"), { x: 0.5, y: 0.2 })
+  await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveAttribute("data-split", "column")
+  await dropTab(page)
+  await expect(tabIn(page, "p2", "c.md")).toBeVisible()
+  await expect.poll(async () => (await paneBox(pane(page, "p2"))).y).toBeLessThan((await paneBox(pane(page, "side"))).y)
+})
+
+test("dropping on a pane's centre moves the tab there and the emptied pane gives its room back", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneMerge", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  await dragTab(page, tabIn(page, "p1", "b.md"), pane(page, "side"), { x: 0.5, y: 0.55 })
+  const zone = page.locator('[data-slot="pane-drop-zone"]')
+  await expect(zone).toHaveCount(1)
+  await expect(zone).toHaveAttribute("data-pane", "side")
+  await expect(zone).not.toHaveAttribute("data-split", /.+/)
+  await dropTab(page)
+
+  await expect(pane(page, "p1")).toHaveCount(0)
+  await expect(tabIn(page, "side", "b.md")).toHaveAttribute("aria-selected", "true")
+  await expect(tabIn(page, "side", "a.md")).toBeVisible()
+
+  const panel = await paneBox(page.locator("#review-panel"))
+  const side = await paneBox(pane(page, "side"))
+  expect(Math.abs(side.width - panel.width)).toBeLessThanOrEqual(2)
+
+  const stored = await storedStrip(page, directory, session)
+  expect(stored?.panes ?? {}).toEqual({})
+})
+
+test("closing the last tab of a pane removes it and the sibling takes the whole region", async ({ page }) => {
+  await openPanes(page, "PaneClose", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  await tabIn(page, "p1", "b.md").locator("..").getByRole("button", { name: "Close tab" }).click()
+  await expect(pane(page, "p1")).toHaveCount(0)
+
+  const panel = await paneBox(page.locator("#review-panel"))
+  const side = await paneBox(pane(page, "side"))
+  expect(Math.abs(side.width - panel.width)).toBeLessThanOrEqual(2)
+  await expect(tabIn(page, "side", "a.md")).toHaveAttribute("aria-selected", "true")
+})
+
+test("pressing Escape during a drag cancels it and leaves the layout alone", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneCancel", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await dragTab(page, tabIn(page, "side", "b.md"), pane(page, "side"), { x: 0.92, y: 0.5 })
+  await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveCount(1)
+  await page.keyboard.press("Escape")
+  await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveCount(0)
+  await dropTab(page)
+
+  await expect(pane(page, "p1")).toHaveCount(0)
+  await expect(tabIn(page, "side", "b.md")).toBeVisible()
+  expect((await storedStrip(page, directory, session))?.layout).toBeUndefined()
+})
+
+test("a pane with no stored tab is not drawn, and a stored layout naming an unknown pane does not break the region", async ({ page }) => {
+  await openPanes(page, "PaneStale", {
+    all: ["file://a.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+    layout: split("split:p9", "row", 0.5, leaf("side"), leaf("p9")),
+    serial: 9,
+  })
+
+  await expect(tabIn(page, "side", "a.md")).toHaveAttribute("aria-selected", "true")
+  await expect(pane(page, "p9")).toHaveCount(0)
+  const panel = await paneBox(page.locator("#review-panel"))
+  const side = await paneBox(pane(page, "side"))
+  expect(Math.abs(side.width - panel.width)).toBeLessThanOrEqual(2)
+})
+
+test("a tab dragged between two existing panes lands before the tab it is dropped on", async ({ page }) => {
+  await openPanes(page, "PaneReorder", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    panes: { "file://c.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://c.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  await dragTab(page, tabIn(page, "side", "b.md"), tabIn(page, "p1", "c.md"), { x: 0.2, y: 0.5 })
+  await expect(page.locator('[data-slot="pane-drop-indicator"]')).toBeVisible()
+  await dropTab(page)
+
+  await expect(tabIn(page, "p1", "b.md")).toHaveAttribute("aria-selected", "true")
+  await expect(pane(page, "p1").getByRole("tab")).toHaveText(["b.md", "c.md"])
+  await expect(pane(page, "side").getByRole("tab")).toHaveText(["a.md"])
+})
+
+test("a tab's menu splits its pane right or down, and offers no split for a pane's only tab", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneMenu", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await tabIn(page, "side", "b.md").click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Split right", exact: true }).click()
+
+  await expect(tabIn(page, "p1", "b.md")).toBeVisible()
+  const left = await paneBox(pane(page, "side"))
+  const right = await paneBox(pane(page, "p1"))
+  expect(right.x).toBeGreaterThanOrEqual(left.x + left.width - 1)
+  expect((await storedStrip(page, directory, session))?.panes).toEqual({ "file://b.md": "p1" })
+
+  // The new pane holds only b.md, so its tab cannot split off again.
+  await tabIn(page, "p1", "b.md").click({ button: "right" })
+  await expect(page.getByRole("menuitem", { name: "Split down", exact: true })).toBeDisabled()
+  await page.keyboard.press("Escape")
+
+  await tabIn(page, "side", "c.md").click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Split down", exact: true }).click()
+  await expect(tabIn(page, "p2", "c.md")).toBeVisible()
+  await expect.poll(async () => (await paneBox(pane(page, "p2"))).y).toBeGreaterThan((await paneBox(pane(page, "side"))).y)
+})
+
+test("a pane's + menu adds the tab to that pane instead of splitting it", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  const directory = "C:/OpenCode/PanePlus"
+  const session = "ses_paneplus"
+
+  await openSession(page, {
+    name: "PanePlus",
+    vcsDiff: [fileDiff("src/plus.ts", { additions: 3 })],
+    fileList: () => [],
+    fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
+    seed: {
+      panes: { [session]: { review: true } },
+      storage: paneTabs(directory, session, { all: ["file://a.md"], active: "file://a.md", selected: { side: "file://a.md" } }),
+    },
+  })
+
+  await pane(page, "side").getByRole("button", { name: "Add tab", exact: true }).click()
+  await pane(page, "side").getByRole("button", { name: /^Review/ }).click()
+
+  await expect(pane(page, "side").getByRole("tab", { name: /^Files Changed/ })).toHaveAttribute("aria-selected", "true")
+  await expect(pane(page, "p1")).toHaveCount(0)
+  await expect(tabIn(page, "side", "a.md")).toBeVisible()
+  expect((await storedStrip(page, directory, session))?.layout).toBeUndefined()
+})
+
+test("a divider moves with the arrow keys and exposes its value", async ({ page }) => {
+  const { directory, session } = await openPanes(page, "PaneKeys", {
+    all: ["file://a.md", "file://b.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  const divider = page.locator('#review-panel [data-slot="pane-divider"]')
+  await expect(divider).toHaveAttribute("role", "separator")
+  await expect(divider).toHaveAttribute("aria-orientation", "vertical")
+  await expect(divider).toHaveAttribute("aria-valuenow", "50")
+
+  await divider.focus()
+  await page.keyboard.press("ArrowRight")
+  await expect(divider).toHaveAttribute("aria-valuenow", "52")
+  await page.keyboard.press("Shift+ArrowLeft")
+  await expect(divider).toHaveAttribute("aria-valuenow", "42")
+  await page.keyboard.press("ArrowUp")
+  await expect(divider).toHaveAttribute("aria-valuenow", "42")
+
+  const ratio = (await storedStrip(page, directory, session))?.layout as { ratio?: number } | undefined
+  expect(ratio?.ratio).toBeCloseTo(0.42, 2)
 })

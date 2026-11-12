@@ -13,6 +13,8 @@ export type PaneDropTarget = {
   rect: Rect
   /** When set, dropping splits `pane` in this direction and puts the tab in the new leaf. */
   split?: "row" | "column"
+  /** With `split`, the new pane goes before `pane` (left or above) instead of after it. */
+  first?: boolean
 }
 
 /**
@@ -24,6 +26,8 @@ export type PaneDropTarget = {
 export function createPaneDrag(input: {
   /** Panes that hold tabs; a pane without them is created by dropping on its zone. */
   shown: (pane: SessionPane) => boolean
+  /** Whether `key` is the only tab of `pane`: splitting it off would close the pane, so no split zone is offered. */
+  solo: (key: string, pane: SessionPane) => boolean
   drop: (key: string, target: PaneDropTarget) => void
 }) {
   const [state, setState] = createStore<{
@@ -90,7 +94,8 @@ export function createPaneDrag(input: {
       const qy2 = rect.bottom - h / 4
 
       // Dropping on a quarter splits the pane; the centre moves the tab into it.
-      if (x < qx || x > qx2 || y < qy || y > qy2) {
+      // The bottom pane sits outside the pane tree, so only the tree's panes split.
+      if (contentPane !== "bottom" && !input.solo(key, contentPane) && (x < qx || x > qx2 || y < qy || y > qy2)) {
         const split = x < qx || x > qx2 ? "row" : "column"
         const onSecond = split === "row" ? x > rect.left + w / 2 : y > rect.top + h / 2
         const half =
@@ -98,7 +103,7 @@ export function createPaneDrag(input: {
             ? { left: onSecond ? rect.left + w / 2 : rect.left, top: rect.top, width: w / 2, height: h }
             : { left: rect.left, top: onSecond ? rect.top + h / 2 : rect.top, width: w, height: h / 2 }
 
-        return { pane: contentPane, strip: false, split, rect: half }
+        return { pane: contentPane, strip: false, split, first: !onSecond, rect: half }
       }
 
       return { pane: contentPane, strip: false, rect: toRect(rect) }
@@ -184,6 +189,7 @@ export function createPaneDrag(input: {
                 <div
                   data-slot={target().strip ? "pane-drop-indicator" : "pane-drop-zone"}
                   data-pane={target().pane}
+                  data-split={target().split}
                   class="absolute"
                   classList={{
                     "bg-v2-icon-icon-accent rounded-full": target().strip,

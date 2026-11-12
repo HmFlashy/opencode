@@ -3,12 +3,14 @@ import {
   closeSessionTab,
   moveSessionTab,
   openSessionTab,
+  opensBeside,
   paneLeaves,
   placeSessionTabs,
   previewSessionTab,
   resizeSessionPane,
   sessionPaneIds,
   sessionPaneLayout,
+  sessionTabPane,
   splitSessionPane,
   splitSessionTab,
   type SessionTabState,
@@ -177,7 +179,7 @@ test("a pane that loses its last tab closes and gives its room back", () => {
 
   expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side"])
   expect(tabs.layout).toBeUndefined()
-  expect(tabs.panes).toBeUndefined()
+  expect(tabs.panes ?? {}).toEqual({})
 })
 
 test("a pane the user just split keeps its room until a tab closes in it", () => {
@@ -214,4 +216,146 @@ test("moving a tab into another pane keeps the selection of both", () => {
   expect(tabs.panes).toEqual({ [OPEN]: "p1" })
   expect(tabs.active).toBe(T1)
   expect(tabs.selected).toEqual({ side: T1, p1: OPEN })
+})
+
+test.each<{ name: string; tabs: SessionTabs; tab: string; expected: boolean }>([
+  { name: "a new tab beside a showing tab", tabs: { all: [A] }, tab: T1, expected: true },
+  { name: "a tab the strip already holds", tabs: { all: [A, T1] }, tab: T1, expected: false },
+  { name: "the first tab of an empty strip", tabs: { all: [] }, tab: T1, expected: false },
+  { name: "a file, which joins its pane", tabs: { all: [A] }, tab: "file://b.ts", expected: false },
+  { name: "a file launcher, which joins its pane", tabs: { all: [A] }, tab: OPEN, expected: false },
+  { name: "a strip holding only bottom tabs", tabs: { all: [T1], panes: { [T1]: "bottom" } }, tab: T2, expected: false },
+  { name: "a new plugin beside a tab in a split pane", tabs: { all: [T1], panes: { [T1]: "split" } }, tab: "artifacts:main", expected: true },
+  { name: "a tab of a plugin that already has one, which joins that pane", tabs: { all: [A, T1] }, tab: T2, expected: false },
+  { name: "a tab of a plugin whose sibling sits in the bottom pane", tabs: { all: [A, T1], panes: { [T1]: "bottom" } }, tab: T2, expected: false },
+])("opensBeside: $name", ({ tabs, tab, expected }) => {
+  expect(opensBeside(tabs, tab)).toBe(expected)
+})
+
+test("splitting a pane's only tab changes nothing, since the pane it left would close", () => {
+  const single = { all: [A], active: A }
+  const start = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+
+  expect(splitSessionTab(single, A, { direction: "row" })).toBe(single)
+  expect(splitSessionTab(start, B, { pane: "p1", direction: "column" })).toBe(start)
+})
+
+test("dropping a pane's only tab on another pane's edge splits that pane and closes the pane it left", () => {
+  const start = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+  const tabs = splitSessionTab(start, B, { pane: "side", direction: "column" })
+  const leaves = paneLeaves(sessionPaneLayout(tabs))
+
+  expect(leaves).toHaveLength(2)
+  expect(leaves).not.toContain("p1")
+  expect(sessionTabPane(tabs, A)).toBe("side")
+  expect(sessionTabPane(tabs, B)).toBe("p2")
+})
+
+test("a split into the bottom pane, or into a pane that does not exist, moves nothing", () => {
+  const tabs = { all: [A, B], active: A }
+
+  expect(splitSessionTab(tabs, B, { pane: "bottom", direction: "row" })).toBe(tabs)
+  expect(moveSessionTab(tabs, B, "p9")).toBe(tabs)
+})
+
+test("a closed side pane is not brought back by a tab opened later", () => {
+  const split = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+  const moved = moveSessionTab(split, A, "p1")
+  const opened = placeSessionTabs(moved, { ...moved, all: [...moved.all, "file:c"], active: "file:c" })
+  const leaves = paneLeaves(sessionPaneLayout(opened))
+
+  expect(paneLeaves(sessionPaneLayout(moved))).toEqual(["p1"])
+  expect(leaves).toEqual(["p1"])
+  expect(sessionTabPane(opened, "file:c")).toBe("p1")
+})
+
+test("a stale pane id in the stored strip falls back to the first pane instead of creating one", () => {
+  const stored = { all: [A, B], active: A, panes: { [B]: "p9" } }
+  const tabs = placeSessionTabs(stored, { ...stored, active: B })
+
+  expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side"])
+  expect(sessionTabPane(tabs, B)).toBe("side")
+})
+
+test("a stored tree is cleaned: bottom and repeated leaves go, ratios stay in range", () => {
+  const dirty: SessionTabs = {
+    all: [A],
+    layout: {
+      type: "split",
+      id: "split:p1",
+      direction: "row",
+      ratio: 7,
+      children: [
+        { type: "leaf", id: "side" },
+        {
+          type: "split",
+          id: "split:p2",
+          direction: "column",
+          ratio: -3,
+          children: [
+            { type: "leaf", id: "bottom" },
+            { type: "leaf", id: "side" },
+          ],
+        },
+      ],
+    },
+  }
+
+  const layout = sessionPaneLayout(dirty)
+
+  expect(paneLeaves(layout)).toEqual(["side"])
+  expect(sessionPaneLayout({ all: [], layout: { type: "leaf", id: "bottom" } })).toEqual({ type: "leaf", id: "side" })
+
+  const ratios = sessionPaneLayout({
+    all: [],
+    layout: {
+      type: "split",
+      id: "split:p1",
+      direction: "row",
+      ratio: 7,
+      children: [
+        { type: "leaf", id: "side" },
+        { type: "leaf", id: "p1" },
+      ],
+    },
+  })
+
+  expect(ratios.type === "split" && ratios.ratio).toBe(0.95)
+  expect(sessionPaneLayout(dirty)).toEqual(layout)
+})
+
+test("a stored tree with nothing to clean keeps its identity", () => {
+  const split = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+
+  expect(sessionPaneLayout(split) === split.layout).toBe(true)
+})
+
+test("a split can put the new pane first, for a drop on the left or top edge", () => {
+  const after = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+  const before = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row", first: true })
+
+  expect(paneLeaves(sessionPaneLayout(after))).toEqual(["side", "p1"])
+  expect(paneLeaves(sessionPaneLayout(before))).toEqual(["p1", "side"])
+  expect(before.panes).toEqual({ [B]: "p1" })
+})
+
+test("placing an already placed write again keeps it, so the last tab of a pane can merge back", () => {
+  const split = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+  const moved = moveSessionTab(split, B, "side")
+  // The strip's writer places what a tab operation returns, so every operation is placed twice.
+  const written = placeSessionTabs(split, moved)
+
+  expect(paneLeaves(sessionPaneLayout(moved))).toEqual(["side"])
+  expect(paneLeaves(sessionPaneLayout(written))).toEqual(["side"])
+  expect(sessionTabPane(written, B)).toBe("side")
+  expect(written.panes ?? {}).toEqual({})
+})
+
+test("placing a move to the bottom pane and back leaves no stale placement", () => {
+  const down = moveSessionTab({ all: [A, T1], active: A }, T1, "bottom")
+  const back = moveSessionTab(down, T1, "side")
+  const written = placeSessionTabs(down, back)
+
+  expect(sessionTabPane(back, T1)).toBe("side")
+  expect(sessionTabPane(written, T1)).toBe("side")
 })
