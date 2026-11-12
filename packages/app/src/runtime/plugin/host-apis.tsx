@@ -781,9 +781,18 @@ export function createPluginAttachment(apis: HostApis) {
     const placement2 = options?.pane || options?.split
 
     const applyPlacement = () => {
-      if (!placement2) return
-      if (options?.split) split(key, session, { direction: options.split, pane: options.pane })
-      else if (options?.pane) place(key, session, options.pane)
+      if (placement2) {
+        if (options?.split) split(key, session, { direction: options.split, pane: options.pane })
+        else if (options?.pane) place(key, session, options.pane)
+        return
+      }
+      // Opens a panel beside the current one so the user can see both, unless told otherwise.
+      if (placement === "append") return
+      const state = layout.panel.state(value)
+      const pane = sessionTabPane(state, key)
+      if (pane === "bottom") return
+      if (state.all.filter((tab) => sessionTabPane(state, tab) !== "bottom").length > 1)
+        split(key, session, { direction: "row", pane })
     }
 
     // An append adds the tab quietly: no selection, no region change, no preview replacement.
