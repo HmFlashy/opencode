@@ -112,7 +112,8 @@ function SessionScreenContent(props: {
     shown: (pane) => (pane === "bottom" ? bottomOpen() : region.pane(pane).keys().length > 0),
     drop: (key, target) =>
       batch(() => {
-        session.layout.tabs().move(key, target.pane, target.before)
+        if (target.split) session.layout.tabs().split(key, target.pane, target.split)
+        else session.layout.tabs().move(key, target.pane, target.before)
 
         if (target.pane === "bottom") session.layout.view().bottom.setOpened(true)
       }),

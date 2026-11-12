@@ -33,6 +33,7 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { same } from "@/runtime/persistence/equality"
 import { useLayout } from "@/shell/state/layout"
 import { useSessionLayout } from "@/session/session-layout"
+import { paneLeaves, type PaneNode, type PaneSplit, type SessionPane } from "@/shell/state/session-tabs"
 import type { Sizing } from "@/session/helpers"
 import { PanelTrigger } from "./panel-trigger"
 import { createSessionPanelMenuEntries, type SessionPanelMenuEntry } from "./panel-menu"
@@ -44,8 +45,9 @@ import { ClosedTabsSection, NewTabButton } from "./closed-tabs-view"
 import type { PaneDrag } from "./pane-drag"
 
 const PANE_HEIGHT_MIN = 120
+const PANE_WIDTH_MIN = 200
 
-/** The side region: the side pane, the pane split below it, and the inner sidebar. */
+/** The side region: its tree of panes, and the inner sidebar. */
 export function SideRegion(props: {
   view: MountedSession
   screen: SessionScreen
@@ -74,27 +76,9 @@ export function SideRegion(props: {
 
   createEffect(on(starting, (key) => key && props.region.openNewTab("side")))
 
-  // The split pane shows while it holds tabs; when the side pane has none, the split pane takes the whole height.
-  const panes = createMemo(() => {
-    const split = props.region.pane("split").keys().length > 0
-
-    if (!split) return ["side"] as const
-
-    if (props.region.pane("side").keys().length === 0) return ["split"] as const
-
-    return ["side", "split"] as const
-  })
-
-  const [column, setColumn] = createStore({ height: 0 })
   const [root, setRoot] = createSignal<HTMLElement>()
-  let stack: HTMLDivElement | undefined
 
-  createResizeObserver(
-    () => stack,
-    ({ height }) => setColumn({ height }),
-  )
-
-  const lowerHeight = createMemo(() => Math.round(column.height * (1 - view().split.ratio())))
+  const primary = createMemo(() => props.region.panes()[0])
 
   guardClosingFocus({
     root,
@@ -124,54 +108,20 @@ export function SideRegion(props: {
             class="h-full flex shrink-0 contain-strict"
             style={{ width: "var(--panel-hold-width, var(--session-side-content-width, 100%))" }}
           >
-            <div
-              ref={stack}
-              class="relative min-w-0 h-full flex-1 flex flex-col overflow-hidden bg-v2-background-bg-base"
-            >
-              <For each={panes()}>
-                {(pane, index) => (
-                  <div
-                    data-slot="session-side-pane"
-                    data-pane={pane}
-                    class="relative min-h-0 min-w-0 bg-v2-background-bg-base"
-                    classList={{
-                      "flex-1": panes().length === 1 || index() === 0,
-                      "shrink-0 border-t border-v2-border-border-base": index() > 0,
-                    }}
-                    style={index() > 0 ? { height: `${lowerHeight()}px` } : undefined}
-                  >
-                    <Show when={index() > 0}>
-                      <div onPointerDown={() => props.size.start()}>
-                        <ResizeHandle
-                          direction="vertical"
-                          edge="start"
-                          size={lowerHeight()}
-                          min={PANE_HEIGHT_MIN}
-                          max={Math.max(PANE_HEIGHT_MIN, column.height - PANE_HEIGHT_MIN)}
-                          onResize={(height) => {
-                            props.size.touch()
-
-                            if (column.height > 0) view().split.resize(1 - height / column.height)
-                          }}
-                        />
-                      </div>
-                    </Show>
-                    <PaneTabs
-                      pane={props.region.pane(pane)}
-                      region={props.region}
-                      view={props.view}
-                      screen={props.screen}
-                      sidebar={props.sidebar}
-                      shown={tabsOpen}
-                      present={tabsVisible}
-                      animate={() => !props.size.active()}
-                      placeholder={index() === 0}
-                      actions={index() === 0}
-                      drag={props.drag}
-                    />
-                  </div>
-                )}
-              </For>
+            <div class="relative min-w-0 h-full flex-1 flex flex-col overflow-hidden bg-v2-background-bg-base">
+              <PaneTree
+                node={() => props.region.layout()}
+                region={props.region}
+                view={props.view}
+                screen={props.screen}
+                sidebar={props.sidebar}
+                shown={tabsOpen}
+                present={tabsVisible}
+                animate={() => !props.size.active()}
+                drag={props.drag}
+                size={props.size}
+                primary={primary}
+              />
             </div>
           </div>
         </Show>
@@ -621,5 +571,149 @@ function LauncherRow(props: { item: SessionPanelMenuItem; onChoose: () => void }
         <Keybind keys={keybind()} variant="neutral" />
       </Show>
     </button>
+  )
+}
+type TreeProps = {
+  region: Region
+  view: MountedSession
+  screen: SessionScreen
+  sidebar: PanelSidebar
+  shown: Accessor<boolean>
+  present: Accessor<boolean>
+  animate: Accessor<boolean>
+  drag: PaneDrag
+  size: Sizing
+  primary: Accessor<SessionPane | undefined>
+}
+
+function PaneTree(props: TreeProps & { node: Accessor<PaneNode> }) {
+  const leaf = createMemo(() => {
+    const node = props.node()
+    return node.type === "leaf" ? node.id : undefined
+  })
+  const split = createMemo(() => {
+    const node = props.node()
+    return node.type === "split" ? node : undefined
+  })
+
+  return (
+    <Show
+      when={leaf()}
+      keyed
+      fallback={
+        <Show when={split()}>
+          {(node) => <PaneSplitView {...props} split={node} />}
+        </Show>
+      }
+    >
+      {(id) => <PaneLeaf {...props} id={id} />}
+    </Show>
+  )
+}
+
+function PaneSplitView(props: TreeProps & { split: Accessor<PaneSplit> }) {
+  const filled = (node: PaneNode) => paneLeaves(node).some((id) => props.region.pane(id).entries().length > 0)
+
+  const pair = createMemo(() => {
+    const split = props.split()
+    const first = filled(split.children[0])
+    const second = filled(split.children[1])
+    return first === second
+  })
+
+  return (
+    <Show
+      when={pair()}
+      fallback={
+        <div class="flex-1 min-w-0 min-h-0 flex">
+          <Show
+            when={filled(props.split().children[0])}
+            fallback={<PaneTree {...props} node={() => props.split().children[1]} />}
+          >
+            <PaneTree {...props} node={() => props.split().children[0]} />
+          </Show>
+        </div>
+      }
+    >
+      <div
+        class="flex-1 min-w-0 min-h-0 flex"
+        classList={{
+          "flex-row": props.split().direction === "row",
+          "flex-col": props.split().direction === "column",
+        }}
+      >
+        <div class="flex min-w-0 min-h-0" style={{ flex: `${props.split().ratio} 1 0%` }}>
+          <PaneTree {...props} node={() => props.split().children[0]} />
+        </div>
+        <PaneDivider split={props.split} region={props.region} size={props.size} />
+        <div class="flex min-w-0 min-h-0" style={{ flex: `${1 - props.split().ratio} 1 0%` }}>
+          <PaneTree {...props} node={() => props.split().children[1]} />
+        </div>
+      </div>
+    </Show>
+  )
+}
+
+function PaneLeaf(props: TreeProps & { id: SessionPane }) {
+  const pane = () => props.region.pane(props.id)
+
+  return (
+    <div
+      data-slot="session-side-pane"
+      data-pane={props.id}
+      class="relative flex-1 min-w-0 min-h-0 bg-v2-background-bg-base"
+    >
+      <PaneTabs
+        pane={pane()}
+        region={props.region}
+        view={props.view}
+        screen={props.screen}
+        sidebar={props.sidebar}
+        shown={props.shown}
+        present={props.present}
+        animate={props.animate}
+        placeholder={props.primary() === props.id}
+        actions={props.primary() === props.id}
+        drag={props.drag}
+      />
+    </div>
+  )
+}
+
+function PaneDivider(props: { split: Accessor<PaneSplit>; region: Region; size: Sizing }) {
+  const { tabs } = useSessionLayout()
+  let element: HTMLDivElement | undefined
+  const [box, setBox] = createStore({ width: 0, height: 0 })
+
+  createResizeObserver(() => element?.parentElement, ({ width, height }) => setBox({ width, height }))
+
+  const total = () => (props.split().direction === "row" ? box.width : box.height)
+  const second = () => Math.round(total() * (1 - props.split().ratio))
+  const min = () => (props.split().direction === "row" ? PANE_WIDTH_MIN : PANE_HEIGHT_MIN)
+  const max = () => Math.max(min(), total() - min())
+
+  return (
+    <div
+      ref={(el) => (element = el)}
+      class="relative shrink-0 bg-v2-border-border-base"
+      classList={{
+        "w-px": props.split().direction === "row",
+        "h-px": props.split().direction === "column",
+      }}
+      onPointerDown={() => props.size.start()}
+    >
+      <ResizeHandle
+        class={props.split().direction === "row" ? "-mx-1" : "-my-1"}
+        direction={props.split().direction === "row" ? "horizontal" : "vertical"}
+        edge="start"
+        size={second()}
+        min={min()}
+        max={max()}
+        onResize={(value) => {
+          props.size.touch()
+          if (total() > 0) tabs().ratio(props.split().id, 1 - value / total())
+        }}
+      />
+    </div>
   )
 }

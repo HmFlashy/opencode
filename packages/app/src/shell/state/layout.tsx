@@ -21,6 +21,10 @@ import {
   openSessionTab,
   placeSessionTabs,
   previewSessionTab,
+  resizeSessionPane,
+  sessionPaneLayout,
+  splitSessionTab,
+  type PaneNode,
   type SessionPane,
   type SessionTabs,
   type SessionTabState,
@@ -97,17 +101,30 @@ export const useCurrentRoute = () => {
   return createMemo(() => currentRoute(location.pathname, location.search))
 }
 
+type PaneSchema = Schema.Codec<PaneNode, unknown>
+
+function paneNodeFields(): PaneSchema {
+  return Schema.Union([
+    Persistence.struct({ type: Schema.Literal("leaf"), id: Schema.String }),
+    Persistence.struct({
+      type: Schema.Literal("split"),
+      id: Schema.String,
+      direction: Schema.Literals(["row", "column"]),
+      ratio: Schema.Finite,
+      children: Schema.Tuple([paneNodeSchema, paneNodeSchema]),
+    }),
+  ])
+}
+
+const paneNodeSchema: PaneSchema = Schema.suspend(paneNodeFields)
+
 const sessionTabsSchema = Persistence.struct({
   all: Persistence.array(Schema.String),
   active: Persistence.optional(Schema.String),
-  panes: Persistence.optional(Persistence.record(Schema.Literals(["split", "bottom"]))),
-  selected: Persistence.optional(
-    Persistence.struct({
-      side: Persistence.optional(Schema.String),
-      split: Persistence.optional(Schema.String),
-      bottom: Persistence.optional(Schema.String),
-    }),
-  ),
+  panes: Persistence.optional(Persistence.record(Schema.String)),
+  selected: Persistence.optional(Persistence.record(Schema.String)),
+  layout: Persistence.optional(paneNodeSchema),
+  serial: Persistence.optional(Schema.Finite),
 })
 
 const closedTabSchema = Schema.Struct({
@@ -269,7 +286,9 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             all: placed.all,
             active: placed.active,
             panes: placed.panes,
-            selected: placed.selected,
+            selected: placed.selected as any,
+            layout: placed.layout,
+            serial: placed.serial,
           })
 
           if (preview) setEphemeral("sessionTabPreview", session, preview.value)
@@ -627,6 +646,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
               active: current?.active,
               panes: current?.panes ? { ...current.panes } : undefined,
               selected: current?.selected ? { ...current.selected } : undefined,
+              layout: current?.layout,
+              serial: current?.serial,
             })
             setEphemeral("sessionTabPreview", to, ephemeral.sessionTabPreview[from])
             scroll.drop([to])
@@ -736,6 +757,24 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             if (!current?.all.includes(tab)) return
             writeTabs(session, moveSessionTab(current, tab, pane, before))
           },
+          /** Splits `pane` in `direction` and moves `tab` into the new pane. */
+          split(tab: string, pane: SessionPane, direction: "row" | "column", before?: string) {
+            const session = key()
+            const current = store.sessionTabs[session]
+
+            if (!current?.all.includes(tab)) return
+            writeTabs(session, splitSessionTab(current, tab, { pane, direction, before }))
+          },
+          /** Stores a split's ratio. */
+          ratio(split: string, value: number) {
+            const session = key()
+            const current = store.sessionTabs[session]
+
+            if (!current) return
+            writeTabs(session, resizeSessionPane(current, split, value))
+          },
+          /** The side region's pane tree. Reactive. */
+          layout: createMemo(() => sessionPaneLayout(tabs())),
           /** Opens the next new tab, e.g. one a pane's "+" menu creates, in `pane`. */
           target(pane: SessionPane) {
             setEphemeral("sessionTabTarget", key(), { pane, at: Date.now() })

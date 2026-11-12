@@ -3,8 +3,14 @@ import {
   closeSessionTab,
   moveSessionTab,
   openSessionTab,
+  paneLeaves,
   placeSessionTabs,
   previewSessionTab,
+  resizeSessionPane,
+  sessionPaneIds,
+  sessionPaneLayout,
+  splitSessionPane,
+  splitSessionTab,
   type SessionTabState,
   type SessionTabs,
 } from "./session-tabs"
@@ -142,4 +148,70 @@ test("closing the selected tab of a pane selects its neighbour in the same pane"
   const tabs = { all: [A, T1, B, T2], active: T2, panes: { [T1]: "bottom" as const, [T2]: "bottom" as const } }
 
   expect(closeSessionTab({ tabs }, T2).tabs.active).toBe(T1)
+})
+
+test("a split puts a tab in its own pane beside the pane it split", () => {
+  const tabs = splitSessionTab({ all: [A], active: A }, OPEN, { direction: "row" })
+  const layout = sessionPaneLayout(tabs)
+
+  expect(paneLeaves(layout)).toEqual(["side", "p1"])
+  expect(layout.type === "split" && layout.direction).toBe("row")
+  expect(tabs.panes).toEqual({ [OPEN]: "p1" })
+  expect(tabs.active).toBe(OPEN)
+  expect(tabs.serial).toBe(1)
+})
+
+test("a split of a pane named by the caller leaves the others alone", () => {
+  const tabs = splitSessionTab({ all: [A, T1], active: A, panes: { [T1]: "bottom" } }, OPEN, {
+    pane: "side",
+    direction: "column",
+  })
+
+  expect(sessionPaneIds(tabs)).toEqual(["side", "p1", "bottom"])
+  expect(tabs.panes).toEqual({ [T1]: "bottom", [OPEN]: "p1" })
+})
+
+test("a pane that loses its last tab closes and gives its room back", () => {
+  const split = splitSessionTab({ all: [A], active: A }, OPEN, { direction: "row" })
+  const tabs = placeSessionTabs(split, { ...split, all: [A], active: A })
+
+  expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side"])
+  expect(tabs.layout).toBeUndefined()
+  expect(tabs.panes).toBeUndefined()
+})
+
+test("a pane the user just split keeps its room until a tab closes in it", () => {
+  const split = splitSessionPane({ all: [A], active: A }, { pane: "side", direction: "row" })
+  const tabs = placeSessionTabs({ ...split.tabs, all: [A], active: A }, { ...split.tabs, all: [A], active: A })
+
+  expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side", "p1"])
+})
+
+test("a split's ratio is stored and kept across placement", () => {
+  const split = splitSessionTab({ all: [A], active: A }, OPEN, { direction: "row" })
+  const resized = resizeSessionPane(split, "split:p1", 0.3, split)
+  const layout = sessionPaneLayout(resized)
+
+  expect(layout.type === "split" && layout.ratio).toBe(0.3)
+
+  const later = placeSessionTabs(resized, { ...resized, all: [A, OPEN], active: A })
+
+  expect((sessionPaneLayout(later) as { ratio?: number }).ratio).toBe(0.3)
+})
+
+test("a tab stored in the legacy split pane migrates to a tree without rewriting its pane", () => {
+  const tabs = placeSessionTabs({ all: [A], active: A }, { all: [A, T1], active: T1, panes: { [T1]: "split" } })
+
+  expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side", "split"])
+  expect(tabs.panes).toEqual({ [T1]: "split" })
+  expect(tabs.layout).toBeUndefined()
+})
+
+test("moving a tab into another pane keeps the selection of both", () => {
+  const split = splitSessionTab({ all: [A, T1], active: T1 }, OPEN, { direction: "row" })
+  const tabs = moveSessionTab(split, T1, "side")
+
+  expect(tabs.panes).toEqual({ [OPEN]: "p1" })
+  expect(tabs.active).toBe(T1)
+  expect(tabs.selected).toEqual({ side: T1, p1: OPEN })
 })
