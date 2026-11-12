@@ -179,7 +179,7 @@ test("a pane that loses its last tab closes and gives its room back", () => {
 
   expect(paneLeaves(sessionPaneLayout(tabs))).toEqual(["side"])
   expect(tabs.layout).toBeUndefined()
-  expect(tabs.panes).toBeUndefined()
+  expect(tabs.panes ?? {}).toEqual({})
 })
 
 test("a pane the user just split keeps its room until a tab closes in it", () => {
@@ -337,4 +337,25 @@ test("a split can put the new pane first, for a drop on the left or top edge", (
   expect(paneLeaves(sessionPaneLayout(after))).toEqual(["side", "p1"])
   expect(paneLeaves(sessionPaneLayout(before))).toEqual(["p1", "side"])
   expect(before.panes).toEqual({ [B]: "p1" })
+})
+
+test("placing an already placed write again keeps it, so the last tab of a pane can merge back", () => {
+  const split = splitSessionTab({ all: [A, B], active: A }, B, { direction: "row" })
+  const moved = moveSessionTab(split, B, "side")
+  // The strip's writer places what a tab operation returns, so every operation is placed twice.
+  const written = placeSessionTabs(split, moved)
+
+  expect(paneLeaves(sessionPaneLayout(moved))).toEqual(["side"])
+  expect(paneLeaves(sessionPaneLayout(written))).toEqual(["side"])
+  expect(sessionTabPane(written, B)).toBe("side")
+  expect(written.panes ?? {}).toEqual({})
+})
+
+test("placing a move to the bottom pane and back leaves no stale placement", () => {
+  const down = moveSessionTab({ all: [A, T1], active: A }, T1, "bottom")
+  const back = moveSessionTab(down, T1, "side")
+  const written = placeSessionTabs(down, back)
+
+  expect(sessionTabPane(back, T1)).toBe("side")
+  expect(sessionTabPane(written, T1)).toBe("side")
 })

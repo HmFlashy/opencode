@@ -322,7 +322,11 @@ export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, targe
   return {
     all: next.all,
     ...(next.active === undefined ? {} : { active: next.active }),
-    ...(Object.keys(remapped).length > 0 ? { panes: remapped } : {}),
+    // An empty `panes` still says nothing is placed outside the first pane. Dropped, the next placement would read it as
+    // "unchanged" and bring the old placement back, so the last tab of a pane could never move out of it.
+    ...(Object.keys(remapped).length > 0 || next.panes !== undefined || previous.panes !== undefined
+      ? { panes: remapped }
+      : {}),
     ...(Object.keys(visible).length > 0 ? { selected: visible } : {}),
     ...(single || defaultLegacyLayout(pruned) ? {} : { layout: pruned }),
     ...(next.serial ?? previous.serial ? { serial: next.serial ?? previous.serial } : {}),
