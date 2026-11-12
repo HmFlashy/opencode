@@ -185,6 +185,9 @@ export function PaneTabs(props: {
     }),
   )
 
+  // A tab splits off only while its pane has another, or the pane would close; the bottom pane never splits.
+  const splittable = createMemo(() => props.pane.id !== "bottom" && props.pane.keys().length > 1)
+
   // Without a new tab item, "+" opens a host-owned new tab view listing the launchers, as ⌘T does inside the region.
   const current = createMemo(() => props.region.shownNewTab(props.pane.id))
   const add = () => props.region.openNewTab(props.pane.id)
@@ -347,6 +350,12 @@ export function PaneTabs(props: {
                 }}
               >
                 {language.t("session.tab.closeOthers")}
+              </Menu.Item>
+              <Menu.Item disabled={!splittable()} onSelect={() => tabs().split(tabMenu.key, props.pane.id, "row")}>
+                {language.t("session.tab.splitRight")}
+              </Menu.Item>
+              <Menu.Item disabled={!splittable()} onSelect={() => tabs().split(tabMenu.key, props.pane.id, "column")}>
+                {language.t("session.tab.splitDown")}
               </Menu.Item>
             </Menu.Content>
           </Menu.Portal>
