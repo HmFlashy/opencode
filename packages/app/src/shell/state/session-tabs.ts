@@ -24,7 +24,7 @@ export type SessionTabs = {
   /** The pane of each stored tab outside `side`, the pane every unplaced tab shows in. */
   panes?: Record<string, SessionPane>
   /** The tab each pane shows; the pane holding `active` shows `active`. */
-  selected?: Partial<Record<SessionPane, string>>
+  selected?: { [pane: string]: string }
   /** The side region's pane tree. Absent until the user splits a pane; see `sessionPaneLayout`. */
   layout?: PaneNode
   /** The last number handed to `nextSessionPaneId`. */
@@ -38,6 +38,20 @@ export type SessionTabState = {
 
 export const sessionTabPane = (tabs: SessionTabs, tab: string): SessionPane => tabs.panes?.[tab] ?? "side"
 
+/**
+ * Whether opening `tab` should show it in a new pane beside the others: only a tab the strip does not hold yet, with a
+ * tab already showing outside the bottom pane. Files and a plugin that already has a tab join the pane they open in
+ * (the host's default), or opening several terminals or files would split the region once per tab.
+ */
+export function opensBeside(previous: SessionTabs, tab: string): boolean {
+  if (previous.all.includes(tab) || tab.startsWith("file:")) return false
+  const plugin = tab.slice(0, tab.indexOf(":") + 1)
+
+  if (plugin && previous.all.some((item) => item.startsWith(plugin))) return false
+
+  return previous.all.some((item) => sessionTabPane(previous, item) !== "bottom")
+}
+
 const DEFAULT_PANE: SessionPane = "side"
 
 export const isPaneLeaf = (node: PaneNode): node is PaneLeaf => node.type === "leaf"
@@ -49,12 +63,45 @@ export function paneLeaves(node: PaneNode): SessionPane[] {
   return node.children.flatMap(paneLeaves)
 }
 
+const MIN_RATIO = 0.05
+
+const clampRatio = (ratio: number) => Math.min(1 - MIN_RATIO, Math.max(MIN_RATIO, ratio))
+
+/**
+ * Drops what a stored tree cannot be trusted for: `bottom` leaves, a leaf id seen twice, and ratios that would collapse
+ * a pane. Returns the same tree when it holds none of them, so memos over it keep their identity.
+ */
+function sanitizeLayout(node: PaneNode): PaneNode {
+  const seen = new Set<string>()
+
+  const walk = (current: PaneNode): PaneNode | undefined => {
+    if (isPaneLeaf(current)) {
+      if (current.id === "bottom" || seen.has(current.id)) return undefined
+      seen.add(current.id)
+
+      return current
+    }
+
+    const first = walk(current.children[0])
+    const second = walk(current.children[1])
+
+    if (!first || !second) return first ?? second
+    const ratio = clampRatio(current.ratio)
+
+    if (first === current.children[0] && second === current.children[1] && ratio === current.ratio) return current
+
+    return { ...current, ratio, children: [first, second] }
+  }
+
+  return walk(node) ?? { type: "leaf", id: DEFAULT_PANE }
+}
+
 /**
  * The stored tree, or the layout a session without one had before panes could split: the `split` pane below `side`
  * while it holds a tab, else `side` alone.
  */
 export function sessionPaneLayout(tabs: SessionTabs): PaneNode {
-  if (tabs.layout) return tabs.layout
+  if (tabs.layout) return sanitizeLayout(tabs.layout)
 
   const split = tabs.all.some((tab) => sessionTabPane(tabs, tab) === "split")
 
@@ -119,7 +166,7 @@ function pruneLeaves(node: PaneNode, previous: SessionTabs, tabs: SessionTabs): 
 /** Adds a leaf beside `pane`, or beside the first leaf when `pane` is `bottom` or unknown. */
 export function splitSessionPane(
   tabs: SessionTabs,
-  options: { pane?: SessionPane; direction: "row" | "column"; ratio?: number },
+  options: { pane?: SessionPane; direction: "row" | "column"; ratio?: number; first?: boolean },
 ): { tabs: SessionTabs; pane: SessionPane } {
   const layout = sessionPaneLayout(tabs)
   const leaves = paneLeaves(layout)
@@ -127,28 +174,17 @@ export function splitSessionPane(
   const pane = nextSessionPaneId(tabs)
   const ratio = options.ratio ?? 0.5
 
-  const split: PaneSplit =
-    options.direction === "row"
-      ? {
-          type: "split",
-          id: `split:${pane}`,
-          direction: "row",
-          ratio,
-          children: [
-            { type: "leaf", id: target },
-            { type: "leaf", id: pane },
-          ],
-        }
-      : {
-          type: "split",
-          id: `split:${pane}`,
-          direction: "column",
-          ratio,
-          children: [
-            { type: "leaf", id: target },
-            { type: "leaf", id: pane },
-          ],
-        }
+  const children: readonly [PaneNode, PaneNode] = options.first
+    ? [
+        { type: "leaf", id: pane },
+        { type: "leaf", id: target },
+      ]
+    : [
+        { type: "leaf", id: target },
+        { type: "leaf", id: pane },
+      ]
+
+  const split: PaneSplit = { type: "split", id: `split:${pane}`, direction: options.direction, ratio, children }
 
   return { tabs: { ...tabs, layout: splitLeaf(layout, target, split), serial: (tabs.serial ?? 0) + 1 }, pane }
 }
@@ -159,7 +195,7 @@ export function resizeSessionPane(tabs: SessionTabs, split: string, ratio: numbe
 
   const resize = (node: PaneNode): PaneNode => {
     if (isPaneLeaf(node)) return node
-    if (node.id === split) return { ...node, ratio }
+    if (node.id === split) return { ...node, ratio: clampRatio(ratio) }
 
     return { ...node, children: [resize(node.children[0]), resize(node.children[1])] }
   }
@@ -185,12 +221,13 @@ const defaultLegacyLayout = (node: PaneNode): boolean =>
  */
 export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, target?: SessionPane): SessionTabs {
   const kept = new Set(previous.all)
-  let layout = next.layout ?? sessionPaneLayout(previous)
+  let layout = next.layout ? sanitizeLayout(next.layout) : sessionPaneLayout(previous)
 
-  // A pane a tab already sits in, or a target, can be missing from the tree: a session stored before the tree existed,
-  // or a target naming `split`. It joins below the first leaf, where the legacy `split` pane sat.
+  // A session stored before the tree existed keeps tabs in the legacy `split` pane. It joins below the first leaf, where
+  // that pane sat. Any other pane the tree lacks (a closed pane, a stale target, a partial store) is not recreated: its
+  // tabs fall back to the first pane, or a closed `side` would come back as an empty pane.
   const attach = (pane: SessionPane | undefined) => {
-    if (!pane || pane === "bottom" || paneLeaves(layout).includes(pane)) return
+    if (pane !== "split" || paneLeaves(layout).includes(pane)) return
     const first = paneLeaves(layout)[0]
 
     layout = splitLeaf(layout, first, {
@@ -207,8 +244,11 @@ export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, targe
 
   const stored = next.panes ? next : previous
 
-  next.all.forEach((tab) => attach(sessionTabPane(stored, tab)))
-  attach(target)
+  next.all.forEach((tab) => attach(stored.panes?.[tab]))
+
+  // A target names the pane the next new tab opens in. Only a write that adds a tab may bring back the legacy pane, or a
+  // stale target would leave it empty.
+  if (next.all.some((tab) => !kept.has(tab))) attach(target)
 
   const leaves = paneLeaves(layout)
   const valid = new Set<SessionPane>([...leaves, "bottom"])
@@ -277,7 +317,7 @@ export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, targe
       : Object.fromEntries(Object.entries(panes).map(([tab, pane]) => [tab, lost.has(pane) ? surviving[0] : pane]))
   const visible = Object.fromEntries(
     selections.filter(([pane]) => pane === "bottom" || surviving.includes(pane as SessionPane)),
-  ) as Partial<Record<SessionPane, string>>
+  ) as { [pane: string]: string }
 
   return {
     all: next.all,
@@ -294,8 +334,10 @@ export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, targe
  * not store (a pinned one), or at the pane's end without `before`.
  */
 export function moveSessionTab(current: SessionTabs, tab: string, pane: SessionPane, before?: string): SessionTabs {
-  const panes = sessionPaneIds(current)
-  const target = panes.includes(pane) ? pane : DEFAULT_PANE
+  const known = current.layout ? sessionPaneIds(current) : [...sessionPaneIds(current), "split"]
+
+  if (!known.includes(pane)) return current
+  const target = pane
   const rest = current.all.filter((item) => item !== tab)
   const members = rest.filter((item) => sessionTabPane(current, item) === target)
   const anchor = before === undefined ? undefined : members.includes(before) ? before : members[0]
@@ -319,9 +361,22 @@ export function moveSessionTab(current: SessionTabs, tab: string, pane: SessionP
 export function splitSessionTab(
   current: SessionTabs,
   tab: string,
-  options: { pane?: SessionPane; direction: "row" | "column"; before?: string },
+  options: { pane?: SessionPane; direction: "row" | "column"; before?: string; first?: boolean },
 ): SessionTabs {
-  const split = splitSessionPane(current, { pane: options.pane ?? sessionTabPane(current, tab), direction: options.direction })
+  const pane = options.pane ?? sessionTabPane(current, tab)
+  const leaves = paneLeaves(sessionPaneLayout(current))
+  const target = leaves.includes(pane) ? pane : leaves[0]
+
+  // The bottom pane sits outside the tree. And splitting off a pane's only tab would empty it, so the pane would close
+  // and leave the same arrangement under a new id.
+  if (pane === "bottom") return current
+  if (sessionTabPane(current, tab) === target && paneTabs(current, target).every((item) => item === tab)) return current
+
+  const split = splitSessionPane(current, {
+    pane,
+    direction: options.direction,
+    first: options.first,
+  })
 
   return moveSessionTab(split.tabs, tab, split.pane, options.before)
 }
