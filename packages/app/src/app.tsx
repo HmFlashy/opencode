@@ -60,6 +60,7 @@ export function AppBaseProviders(
       <Title>Operon Forge</Title>
       <Font />
       <ThemeProvider
+        defaultTheme="operon"
         onThemeApplied={(_, mode, scheme) => {
           props.onThemeApplied?.(mode, scheme)
         }}
