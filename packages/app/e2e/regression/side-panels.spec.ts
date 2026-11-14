@@ -130,7 +130,7 @@ test("closing the last New tab closes the side region, and only a New tab lists 
 test("tabs in a narrow side strip shrink to keep their close buttons, and a tab's menu closes the others", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1000, height: 700 })
+  await page.setViewportSize({ width: 1040, height: 700 })
   const directory = "C:/OpenCode/NarrowStrip"
   const key = `local\u0000${base64Encode(directory)}/ses_narrowstrip`
   const files = ["a.md", "a-file-name-long-enough-to-overflow-the-side-strip-by-itself.md", "b.md"]
@@ -542,6 +542,23 @@ test("closing the last tab of a pane removes it and the sibling takes the whole 
   const side = await paneBox(pane(page, "side"))
   expect(Math.abs(side.width - panel.width)).toBeLessThanOrEqual(2)
   await expect(tabIn(page, "side", "a.md")).toHaveAttribute("aria-selected", "true")
+})
+
+test("a pane's close button closes all its tabs and leaves the other panes alone", async ({ page }) => {
+  await openPanes(page, "PaneCloseAll", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    panes: { "file://b.md": "p1", "file://c.md": "p1" },
+    selected: { side: "file://a.md", p1: "file://b.md" },
+    layout: split("split:p1", "row", 0.5, leaf("side"), leaf("p1")),
+    serial: 1,
+  })
+
+  await pane(page, "p1").getByRole("button", { name: "Close pane", exact: true }).click()
+  await expect(pane(page, "p1")).toHaveCount(0)
+  await expect(tabIn(page, "side", "a.md")).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("tab", { name: "b.md", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("tab", { name: "c.md", exact: true })).toHaveCount(0)
 })
 
 test("pressing Escape during a drag cancels it and leaves the layout alone", async ({ page }) => {

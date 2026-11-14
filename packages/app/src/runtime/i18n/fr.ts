@@ -546,6 +546,7 @@ export const dict = {
   "session.tab.splitRight": "Diviser à droite",
   "session.tab.splitDown": "Diviser vers le bas",
   "session.panel.launcher.more": "Autres volets",
+  "session.pane.close": "Fermer le volet",
   "session.error.notFound": "Cette session est introuvable",
   "session.error.notFound.description": "Cet onglet pointe vers une session qui n'existe plus sur ce serveur.",
   "session.error.notFound.closeTab": "Fermer l'onglet",

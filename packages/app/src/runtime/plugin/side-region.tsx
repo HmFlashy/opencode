@@ -192,6 +192,11 @@ export function PaneTabs(props: {
   const current = createMemo(() => props.region.shownNewTab(props.pane.id))
   const add = () => props.region.openNewTab(props.pane.id)
 
+  const closePane = () => {
+    props.region.newTabs(props.pane.id).forEach((entry) => props.region.dismissNewTab(entry.id))
+    closable().forEach((key) => props.region.close(key))
+  }
+
   let selectionEvent: Event | undefined
 
   return (
@@ -326,6 +331,9 @@ export function PaneTabs(props: {
             >
               {(item) => <AddButton item={item()} onChoose={target} />}
             </Show>
+            <Show when={props.pane.id !== "bottom"}>
+              <ClosePaneButton onClose={closePane} />
+            </Show>
           </div>
         </Tabs.List>
         <Menu
@@ -424,6 +432,22 @@ export function PaneTabs(props: {
         />
       </div>
     </Tabs>
+  )
+}
+
+function ClosePaneButton(props: { onClose: () => void }): JSX.Element {
+  const language = useLanguage()
+
+  return (
+    <Tooltip value={language.t("session.pane.close")} placement="bottom" class="flex items-center">
+      <IconButton
+        icon={<Icon name="close" />}
+        variant="ghost-muted"
+        size="large"
+        onClick={props.onClose}
+        aria-label={language.t("session.pane.close")}
+      />
+    </Tooltip>
   )
 }
 
