@@ -1,6 +1,15 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 import { fileDiff, openSession } from "../utils/workspace"
-import { dragTab, dropTab, leaf, openReviewLauncher, paneTabs, split, storedStrip, type PaneTreeSeed } from "../utils/side-panel"
+import {
+  dragTab,
+  dropTab,
+  leaf,
+  openReviewLauncher,
+  paneTabs,
+  split,
+  storedStrip,
+  type PaneTreeSeed,
+} from "../utils/side-panel"
 import { base64Encode } from "@opencode/util/encode"
 
 test("review content stays aligned with the side region in both directions", async ({ page }) => {
@@ -248,7 +257,6 @@ test("the new tab view lists recently closed tabs, expands to the rest, and keep
   await expect(recent).not.toContainText("README.md")
 })
 
-
 type Strip = {
   all: string[]
   active?: string
@@ -379,14 +387,18 @@ test("dragging a split's divider resizes its panes and the ratio survives a relo
   await page.mouse.move(grip.x + grip.width / 2 + 120, grip.y + grip.height / 2, { steps: 8 })
   await page.mouse.up()
 
-  await expect.poll(async () => Math.round((await paneBox(pane(page, "side"))).width - before.width)).toBeGreaterThan(100)
+  await expect
+    .poll(async () => Math.round((await paneBox(pane(page, "side"))).width - before.width))
+    .toBeGreaterThan(100)
   const resized = await paneBox(pane(page, "side"))
   const stored = await storedStrip(page, directory, session)
   expect((stored?.layout as { ratio?: number } | undefined)?.ratio).toBeGreaterThan(0.5)
 
   await page.reload()
   await expect(tabIn(page, "p1", "b.md")).toBeVisible()
-  await expect.poll(async () => Math.abs((await paneBox(pane(page, "side"))).width - resized.width)).toBeLessThanOrEqual(2)
+  await expect
+    .poll(async () => Math.abs((await paneBox(pane(page, "side"))).width - resized.width))
+    .toBeLessThanOrEqual(2)
 })
 
 test("a divider stops at the minimum pane size", async ({ page }) => {
@@ -473,7 +485,9 @@ test("dragging a tab onto the bottom edge stacks a new pane below, and the top e
   await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveAttribute("data-split", "column")
   await dropTab(page)
   await expect(tabIn(page, "p1", "b.md")).toBeVisible()
-  await expect.poll(async () => (await paneBox(pane(page, "p1"))).y).toBeGreaterThan((await paneBox(pane(page, "side"))).y)
+  await expect
+    .poll(async () => (await paneBox(pane(page, "p1"))).y)
+    .toBeGreaterThan((await paneBox(pane(page, "side"))).y)
 
   await dragTab(page, tabIn(page, "side", "c.md"), pane(page, "side"), { x: 0.5, y: 0.2 })
   await expect(page.locator('[data-slot="pane-drop-zone"]')).toHaveAttribute("data-split", "column")
@@ -548,7 +562,9 @@ test("pressing Escape during a drag cancels it and leaves the layout alone", asy
   expect((await storedStrip(page, directory, session))?.layout).toBeUndefined()
 })
 
-test("a pane with no stored tab is not drawn, and a stored layout naming an unknown pane does not break the region", async ({ page }) => {
+test("a pane with no stored tab is not drawn, and a stored layout naming an unknown pane does not break the region", async ({
+  page,
+}) => {
   await openPanes(page, "PaneStale", {
     all: ["file://a.md"],
     active: "file://a.md",
@@ -633,7 +649,9 @@ test("a tab's menu splits its pane right or down, and offers no split for a pane
   await tabIn(page, "side", "c.md").click({ button: "right" })
   await page.getByRole("menuitem", { name: "Split down", exact: true }).click()
   await expect(tabIn(page, "p2", "c.md")).toBeVisible()
-  await expect.poll(async () => (await paneBox(pane(page, "p2"))).y).toBeGreaterThan((await paneBox(pane(page, "side"))).y)
+  await expect
+    .poll(async () => (await paneBox(pane(page, "p2"))).y)
+    .toBeGreaterThan((await paneBox(pane(page, "side"))).y)
 })
 
 test("a pane's + menu adds the tab to that pane instead of splitting it", async ({ page }) => {
@@ -648,12 +666,18 @@ test("a pane's + menu adds the tab to that pane instead of splitting it", async 
     fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
     seed: {
       panes: { [session]: { review: true } },
-      storage: paneTabs(directory, session, { all: ["file://a.md"], active: "file://a.md", selected: { side: "file://a.md" } }),
+      storage: paneTabs(directory, session, {
+        all: ["file://a.md"],
+        active: "file://a.md",
+        selected: { side: "file://a.md" },
+      }),
     },
   })
 
   await pane(page, "side").getByRole("button", { name: "Add tab", exact: true }).click()
-  await pane(page, "side").getByRole("button", { name: /^Review/ }).click()
+  await pane(page, "side")
+    .getByRole("button", { name: /^Review/ })
+    .click()
 
   await expect(pane(page, "side").getByRole("tab", { name: /^Files Changed/ })).toHaveAttribute("aria-selected", "true")
   await expect(pane(page, "p1")).toHaveCount(0)
@@ -686,4 +710,17 @@ test("a divider moves with the arrow keys and exposes its value", async ({ page 
 
   const ratio = (await storedStrip(page, directory, session))?.layout as { ratio?: number } | undefined
   expect(ratio?.ratio).toBeCloseTo(0.42, 2)
+})
+
+test("the header launcher opens a panel in the side region", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await openSession(page, { name: "HeaderLauncher", vcsDiff: [fileDiff("a.ts", { additions: 1 })] })
+
+  const launcher = page.locator('[data-slot="session-panel-launcher"]')
+  await expect(launcher).toBeVisible()
+  await expect(page.locator("#review-panel")).toHaveCount(0)
+
+  await launcher.getByRole("button", { name: "Review", exact: true }).click()
+  await expect(page.locator("#review-panel")).toBeVisible()
+  await expect(page.locator('#review-panel [role="tab"][aria-selected="true"]')).toContainText("Files Changed")
 })

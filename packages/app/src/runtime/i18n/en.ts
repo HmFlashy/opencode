@@ -604,6 +604,7 @@ export const dict = {
   "session.panes.resize": "Resize panes",
   "session.tab.splitRight": "Split right",
   "session.tab.splitDown": "Split down",
+  "session.panel.launcher.more": "More panels",
   "session.panel.bottom": "Bottom panel",
   "session.panel.bottom.hide": "Hide bottom panel",
   "session.error.notFound": "This session cannot be found",
