@@ -191,7 +191,7 @@ const make = Effect.gen(function* () {
     global.home,
     ".opencode",
     "bin",
-    process.platform === "win32" ? "operon-forge.exe" : "operon-forge",
+    process.platform === "win32" ? "exon.exe" : "exon",
   )
   const legacyCurlPath = path.resolve(
     global.home,
@@ -288,7 +288,7 @@ const make = Effect.gen(function* () {
           const res = await fetch("https://api.github.com/repos/HmFlashy/operon-forge/releases/latest", {
             signal: AbortSignal.any([signal, AbortSignal.timeout(6_000)]),
             headers: {
-              "User-Agent": "Operon-Forge-Updater",
+              "User-Agent": "Operon-Exon-Updater",
               Accept: "application/vnd.github.v3+json",
             },
           })
@@ -296,7 +296,7 @@ const make = Effect.gen(function* () {
           const json = (await res.json()) as { tag_name?: string }
           if (!json.tag_name) return undefined
           return {
-            package: "operon-forge",
+            package: "operon-exon",
             version: json.tag_name.replace(/^v/, ""),
           }
         },
@@ -516,16 +516,16 @@ const make = Effect.gen(function* () {
             method,
             command: ["curl", "-fsSL", "-o", installer, installerUrl],
             displayCommand: ["curl", "-fsSL", installerUrl],
-            title: "Could not download the Operon Forge installer",
-            retry: "Check your network, then run operon-forge upgrade again.",
+            title: "Could not download the Operon Exon installer",
+            retry: "Check your network, then run exon upgrade again.",
           })
           return yield* retaining(
             method,
             runUpgrade({
               method,
               command: [bash, installer, "--version", version, "--no-modify-path"],
-              displayCommand: ["operon-forge", "upgrade", version, "--method", "curl"],
-              title: "The Operon Forge installer failed",
+              displayCommand: ["exon", "upgrade", version, "--method", "curl"],
+              title: "The Operon Exon installer failed",
             }),
           )
         }

@@ -1,10 +1,10 @@
-name: Operon Forge Release
+name: Operon Exon Release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v2.2.6-forge.1)"
+        description: "Release tag (e.g. v2.2.6-exon.1)"
         required: false
         type: string
       draft:
@@ -54,18 +54,18 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/}"
           else
             PKG_VER=$(node -p "require('./package.json').version || '2.2.5'")
-            TAG="v${PKG_VER}-forge.$(date +%Y%m%d%H%M)"
+            TAG="v${PKG_VER}-exon.$(date +%Y%m%d%H%M)"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Operon Forge CLI
+      - name: Build Operon Exon CLI
         working-directory: packages/cli
         run: |
           bun run build
         env:
           OPENCODE_TARGET: ${{ matrix.target }}
-          OPENCODE_CLI_NAME: operon-forge
+          OPENCODE_CLI_NAME: exon
           OPENCODE_VERSION: ${{ steps.version.outputs.version }}
           OPENCODE_MODELS_SNAPSHOT: ${{ github.workspace }}/.cache/models-catalog/api.json
           BUN_COMPILE_RELEASE: bun-v1.4.4
@@ -76,17 +76,17 @@ jobs:
         run: |
           CLI_DIST="packages/cli/dist/cli-${{ matrix.target }}"
           mkdir -p dist-release
-          TARBALL="dist-release/operon-forge-${{ matrix.target }}.tar.gz"
+          TARBALL="dist-release/operon-exon-${{ matrix.target }}.tar.gz"
           
-          # Archive binaries
-          tar -czf "$TARBALL" -C "$CLI_DIST/bin" operon-forge opencode
+          # Archive binaries (exon, operon-exon, opencode)
+          tar -czf "$TARBALL" -C "$CLI_DIST/bin" exon operon-exon opencode
           echo "Created $TARBALL"
           ls -lh "$TARBALL"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: operon-forge-${{ matrix.target }}
+          name: operon-exon-${{ matrix.target }}
           path: dist-release/*
 
   release:
@@ -107,7 +107,7 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/}"
           else
             PKG_VER=$(node -p "require('./package.json').version || '2.2.5'")
-            TAG="v${PKG_VER}-forge.$(date +%Y%m%d%H%M)"
+            TAG="v${PKG_VER}-exon.$(date +%Y%m%d%H%M)"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
@@ -121,7 +121,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Operon Forge ${{ steps.version.outputs.tag }}
+          name: Operon Exon ${{ steps.version.outputs.tag }}
           draft: ${{ github.event.inputs.draft || false }}
           prerelease: false
           files: release-assets/*

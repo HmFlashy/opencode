@@ -57,7 +57,7 @@ export function AppBaseProviders(
 ) {
   return (
     <MetaProvider>
-      <Title>Operon Forge</Title>
+      <Title>Operon Exon</Title>
       <Font />
       <ThemeProvider
         defaultTheme="operon"
