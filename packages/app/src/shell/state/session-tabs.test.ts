@@ -91,11 +91,46 @@ const A = "file:a"
 
 const B = "file:b"
 
+const C = "file:c"
+
+const D = "file:d"
+
 const T1 = "terminal:1"
 
 const T2 = "terminal:2"
 
 test.each<{ name: string; run: () => SessionTabs; expected: SessionTabs }>([
+  {
+    name: "intra-pane: move tab forward before another tab",
+    run: () => moveSessionTab({ all: [A, B, C, D], active: B }, B, "side", D),
+    expected: { all: [A, C, B, D], active: B, panes: {}, selected: { side: B } },
+  },
+  {
+    name: "intra-pane: move tab backward to the end of the pane",
+    run: () => moveSessionTab({ all: [A, B, C], active: A }, A, "side"),
+    expected: { all: [B, C, A], active: A, panes: {}, selected: { side: A } },
+  },
+  {
+    name: "intra-pane: move tab to the front of the pane",
+    run: () => moveSessionTab({ all: [A, B, C], active: C }, C, "side", A),
+    expected: { all: [C, A, B], active: C, panes: {}, selected: { side: C } },
+  },
+  {
+    name: "intra-pane: move tab preserves tabs belonging to other panes at relative positions",
+    run: () =>
+      moveSessionTab(
+        { all: [A, T1, B, C], active: C, panes: { [T1]: "bottom" }, selected: { bottom: T1 } },
+        C,
+        "side",
+        A,
+      ),
+    expected: {
+      all: [C, A, T1, B],
+      active: C,
+      panes: { [T1]: "bottom" },
+      selected: { side: C, bottom: T1 },
+    },
+  },
   {
     name: "move to the bottom pane selects the tab there and keeps the side pane's tab shown",
     run: () => moveSessionTab({ all: [A, T1], active: A }, T1, "bottom"),

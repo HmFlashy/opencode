@@ -583,6 +583,32 @@ test("a tab dragged between two existing panes lands before the tab it is droppe
   await expect(pane(page, "side").getByRole("tab")).toHaveText(["a.md"])
 })
 
+test("a tab dragged within the same pane strip reorders the tabs", async ({ page }) => {
+  await openPanes(page, "IntraPaneReorder", {
+    all: ["file://a.md", "file://b.md", "file://c.md"],
+    active: "file://a.md",
+    selected: { side: "file://a.md" },
+  })
+
+  await expect(pane(page, "side").getByRole("tab")).toHaveText(["a.md", "b.md", "c.md"])
+
+  // Drag c.md before a.md (left edge of a.md)
+  await dragTab(page, tabIn(page, "side", "c.md"), tabIn(page, "side", "a.md"), { x: 0.2, y: 0.5 })
+  await expect(page.locator('[data-slot="pane-drop-indicator"]')).toBeVisible()
+  await dropTab(page)
+
+  await expect(pane(page, "side").getByRole("tab")).toHaveText(["c.md", "a.md", "b.md"])
+  await expect(tabIn(page, "side", "c.md")).toHaveAttribute("aria-selected", "true")
+
+  // Drag c.md to the right of b.md (after b.md)
+  await dragTab(page, tabIn(page, "side", "c.md"), tabIn(page, "side", "b.md"), { x: 0.8, y: 0.5 })
+  await expect(page.locator('[data-slot="pane-drop-indicator"]')).toBeVisible()
+  await dropTab(page)
+
+  await expect(pane(page, "side").getByRole("tab")).toHaveText(["a.md", "b.md", "c.md"])
+  await expect(tabIn(page, "side", "c.md")).toHaveAttribute("aria-selected", "true")
+})
+
 test("a tab's menu splits its pane right or down, and offers no split for a pane's only tab", async ({ page }) => {
   const { directory, session } = await openPanes(page, "PaneMenu", {
     all: ["file://a.md", "file://b.md", "file://c.md"],

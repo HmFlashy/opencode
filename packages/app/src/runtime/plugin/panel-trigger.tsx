@@ -113,6 +113,7 @@ export function PanelTrigger(props: {
   return (
     <div
       data-pane-tab={props.value}
+      data-pane-pinned={props.tab.pinned ? "" : undefined}
       class="h-full flex items-center"
       classList={{ "opacity-40": props.dragging }}
       onPointerDown={(event) => {
