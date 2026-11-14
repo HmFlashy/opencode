@@ -285,7 +285,7 @@ const make = Effect.gen(function* () {
     if (method === "curl" || !method) {
       const ghRelease = yield* Effect.tryPromise({
         try: async (signal) => {
-          const res = await fetch("https://api.github.com/repos/HmFlashy/opencode/releases/latest", {
+          const res = await fetch("https://api.github.com/repos/HmFlashy/operon-forge/releases/latest", {
             signal: AbortSignal.any([signal, AbortSignal.timeout(6_000)]),
             headers: {
               "User-Agent": "Operon-Forge-Updater",
@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
           const directory = yield* temporaryDirectory("update-")
           const installer = path.join(directory, "install")
           const installerUrl =
-            "https://raw.githubusercontent.com/HmFlashy/opencode/chore/operon-forge-branding/install"
+            "https://raw.githubusercontent.com/HmFlashy/operon-forge/chore/operon-forge-branding/install"
           yield* runUpgrade({
             method,
             command: ["curl", "-fsSL", "-o", installer, installerUrl],

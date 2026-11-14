@@ -3,7 +3,7 @@ set -euo pipefail
 APP=operon-forge
 LEGACY_APP=opencode
 SOURCE_APP=operon-forge
-FORGE_REPO="HmFlashy/opencode"
+FORGE_REPO="HmFlashy/operon-forge"
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
@@ -23,7 +23,7 @@ Options:
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
-    curl -fsSL https://raw.githubusercontent.com/HmFlashy/opencode/chore/operon-forge-branding/install | bash
+    curl -fsSL https://raw.githubusercontent.com/HmFlashy/operon-forge/chore/operon-forge-branding/install | bash
     ./install --binary /path/to/operon-forge
 EOF
 }
