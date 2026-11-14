@@ -191,9 +191,18 @@ const make = Effect.gen(function* () {
     global.home,
     ".opencode",
     "bin",
+    process.platform === "win32" ? "operon-forge.exe" : "operon-forge",
+  )
+  const legacyCurlPath = path.resolve(
+    global.home,
+    ".opencode",
+    "bin",
     process.platform === "win32" ? "opencode.exe" : "opencode",
   )
-  const curlBinary = yield* fs.realPath(curlPath).pipe(Effect.orElseSucceed(() => curlPath))
+  const curlBinary = yield* fs.realPath(curlPath).pipe(
+    Effect.orElse(() => fs.realPath(legacyCurlPath)),
+    Effect.orElseSucceed(() => curlPath),
+  )
 
   // On Windows a bare `bash` may be the WSL launcher, which cannot run the installer against Windows paths.
   const installerBash = Effect.fnUntraced(function* () {
@@ -273,6 +282,30 @@ const make = Effect.gen(function* () {
   }
 
   const release = Effect.fnUntraced(function* (method?: Method) {
+    if (method === "curl" || !method) {
+      const ghRelease = yield* Effect.tryPromise({
+        try: async (signal) => {
+          const res = await fetch("https://api.github.com/repos/HmFlashy/opencode/releases/latest", {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(6_000)]),
+            headers: {
+              "User-Agent": "Operon-Forge-Updater",
+              Accept: "application/vnd.github.v3+json",
+            },
+          })
+          if (!res.ok) return undefined
+          const json = (await res.json()) as { tag_name?: string }
+          if (!json.tag_name) return undefined
+          return {
+            package: "operon-forge",
+            version: json.tag_name.replace(/^v/, ""),
+          }
+        },
+        catch: () => undefined,
+      }).pipe(Effect.orElseSucceed(() => undefined))
+
+      if (ghRelease) return ghRelease
+    }
+
     const distribution = method === "brew" ? "homebrew" : "npm"
     // Homebrew Core builds its formula on its own schedule, so the tap release does not describe it.
     const core = method === "brew" && installedFormula === "opencode"
@@ -477,20 +510,22 @@ const make = Effect.gen(function* () {
           yield* fs.makeDirectory(global.cache, { recursive: true })
           const directory = yield* temporaryDirectory("update-")
           const installer = path.join(directory, "install")
+          const installerUrl =
+            "https://raw.githubusercontent.com/HmFlashy/opencode/chore/operon-forge-branding/install"
           yield* runUpgrade({
             method,
-            command: ["curl", "-fsSL", "-o", installer, "https://opencode.ai/v2/install"],
-            displayCommand: ["curl", "-fsSL", "https://opencode.ai/v2/install"],
-            title: "Could not download the OpenCode installer",
-            retry: "Check your network, then run opencode upgrade again.",
+            command: ["curl", "-fsSL", "-o", installer, installerUrl],
+            displayCommand: ["curl", "-fsSL", installerUrl],
+            title: "Could not download the Operon Forge installer",
+            retry: "Check your network, then run operon-forge upgrade again.",
           })
           return yield* retaining(
             method,
             runUpgrade({
               method,
               command: [bash, installer, "--version", version, "--no-modify-path"],
-              displayCommand: ["opencode", "upgrade", version, "--method", "curl"],
-              title: "The OpenCode installer failed",
+              displayCommand: ["operon-forge", "upgrade", version, "--method", "curl"],
+              title: "The Operon Forge installer failed",
             }),
           )
         }

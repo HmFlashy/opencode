@@ -194,7 +194,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     },
     define: {
       OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_CLI_NAME: "'opencode'",
+      OPENCODE_CLI_NAME: `'${process.env.OPENCODE_CLI_NAME ?? "operon-forge"}'`,
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_ARTIFACT: `'cli'`,
       ...(highlights ? { OPENCODE_RELEASE_HIGHLIGHTS: JSON.stringify(highlights) } : {}),
@@ -210,7 +210,15 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     process.exit(1)
   }
   verifySimulationGraph(simulationInputs)
-  await NativeArch.verify(path.join(outdir, name, "bin", item.os === "win32" ? `${binary}.exe` : binary), item.arch)
+  const binFile = path.join(outdir, name, "bin", item.os === "win32" ? `${binary}.exe` : binary)
+  await NativeArch.verify(binFile, item.arch)
+  const forgeFile = path.join(outdir, name, "bin", item.os === "win32" ? "operon-forge.exe" : "operon-forge")
+  if (binFile !== forgeFile) {
+    await Bun.write(forgeFile, Bun.file(binFile))
+    if (item.os !== "win32") {
+      await $`chmod +x ${forgeFile}`
+    }
+  }
 
   await Bun.write(
     path.join(outdir, name, "package.json"),
